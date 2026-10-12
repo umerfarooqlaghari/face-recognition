@@ -26,22 +26,25 @@ async def generate_face_scan_invite(
     db: AsyncSession = Depends(get_db)
 ):
     # Only managers or super admins can circulate enrollment invites
-    if current_user.role not in ["manager", "super_admin"]:
+    if current_user.role not in ["manager", "super_admin", "admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only managers and administrators can circulate face enrollment invites"
         )
 
-    # Check target employee exists
-    emp_res = await db.execute(select(User).where(User.id == req.user_id))
+    # Check target employee exists in same tenant
+    emp_res = await db.execute(
+        select(User).where(User.id == req.user_id, User.tenant_id == current_user.tenant_id)
+    )
     emp = emp_res.scalar_one_or_none()
     if not emp:
-        raise HTTPException(status_code=404, detail="Employee not found")
+        raise HTTPException(status_code=404, detail="Employee not found in your organization")
 
     invite_token = f"inv_{secrets.token_urlsafe(32)}"
     expires_at = datetime.now(timezone.utc) + timedelta(hours=req.expires_hours or 48)
 
     invite = FaceScanInvite(
+        tenant_id=current_user.tenant_id,
         user_id=emp.id,
         invite_token=invite_token,
         expires_at=expires_at

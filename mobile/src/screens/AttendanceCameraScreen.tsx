@@ -13,6 +13,7 @@ import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { getCurrentGPSLocation, LocationCoordinates } from '../services/location';
 import { getDeviceTelemetry } from '../services/device';
 import { markAttendanceCheckIn } from '../services/api';
+import { CloseIcon, FlipCameraIcon, CheckIcon, LocationPinIcon, GlobeIcon } from '../components/SvgIcons';
 
 const { width, height } = Dimensions.get('window');
 
@@ -130,21 +131,28 @@ export default function AttendanceCameraScreen({
         {/* Header HUD */}
         <View style={styles.overlayHeader}>
           <TouchableOpacity style={styles.closeBtn} onPress={onCancel}>
-            <Text style={styles.closeBtnText}>✕</Text>
+            <CloseIcon size={18} color="#ffffff" />
           </TouchableOpacity>
 
           <View style={styles.badgeContainer}>
-            <Text style={styles.badgeText}>
-              {locLoading
-                ? '🛰️ ACQUIRING GPS...'
-                : isRemote
-                ? '🌐 REMOTE (GEOFENCE WAIVED)'
-                : '📍 ON-SITE (200M GEOFENCE)'}
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              {isRemote ? (
+                <GlobeIcon size={14} color="#93c5fd" />
+              ) : (
+                <LocationPinIcon size={14} color="#93c5fd" />
+              )}
+              <Text style={styles.badgeText}>
+                {locLoading
+                  ? 'ACQUIRING GPS...'
+                  : isRemote
+                  ? 'REMOTE (GEOFENCE WAIVED)'
+                  : 'ON-SITE (200M GEOFENCE)'}
+              </Text>
+            </View>
           </View>
 
           <TouchableOpacity style={styles.flipBtn} onPress={toggleCamera}>
-            <Text style={styles.flipBtnText}>🔄</Text>
+            <FlipCameraIcon size={20} color="#ffffff" />
           </TouchableOpacity>
         </View>
 
@@ -164,7 +172,7 @@ export default function AttendanceCameraScreen({
 
           <Text style={styles.instructionText}>
             {verifyResult
-              ? `✓ Match: ${(verifyResult.similarity_score * 100).toFixed(1)}% • ${verifyResult.status.toUpperCase()}`
+              ? `Match: ${(verifyResult.similarity_score * 100).toFixed(1)}% • ${verifyResult.status.toUpperCase()}`
               : isVerifying
               ? 'Analyzing facial biometrics with pgvector...'
               : 'Position face in frame & press punch'}
@@ -175,12 +183,12 @@ export default function AttendanceCameraScreen({
         <View style={styles.controlsContainer}>
           {isVerifying ? (
             <View style={styles.verifyingCard}>
-              <ActivityIndicator size="large" color="#38bdf8" />
+              <ActivityIndicator size="large" color="#ffffff" />
               <Text style={styles.verifyingText}>Verifying Face & Geofence...</Text>
             </View>
           ) : verifyResult ? (
             <View style={styles.resultCard}>
-              <Text style={styles.resultCheck}>✓</Text>
+              <CheckIcon size={28} color="#059669" />
               <Text style={styles.resultTitle}>Attendance Recorded!</Text>
               <Text style={styles.resultSubtitle}>
                 {verifyResult.verification_type === 'face_geo'

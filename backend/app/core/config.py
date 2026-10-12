@@ -40,4 +40,11 @@ class Settings(BaseSettings):
     DEFAULT_OFFICE_RADIUS_METERS: int = 200
     MAX_IMAGE_UPLOAD_BYTES: int = 10485760
 
+    # AWS SES (Simple Email Service)
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    AWS_REGION: str = "us-east-1"
+    AWS_SES_FROM_EMAIL: str = "noreply@attendapp.com"
+    FRONTEND_URL: str = "http://localhost:3000"
+
 settings = Settings()

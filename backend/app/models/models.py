@@ -13,10 +13,25 @@ Base = declarative_base()
 def get_utc_now():
     return datetime.now(timezone.utc)
 
+class Tenant(Base):
+    __tablename__ = "tenants"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(150), nullable=False)
+    slug = Column(String(100), unique=True, nullable=False, index=True)
+    domain = Column(String(150), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=get_utc_now)
+
+    users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
+    offices = relationship("Office", back_populates="tenant", cascade="all, delete-orphan")
+    attendance_records = relationship("AttendanceRecord", back_populates="tenant")
+
 class Office(Base):
     __tablename__ = "offices"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(100), nullable=False)
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
@@ -24,23 +39,31 @@ class Office(Base):
     address = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=get_utc_now)
 
+    tenant = relationship("Tenant", back_populates="offices")
     users = relationship("User", back_populates="office")
 
 class User(Base):
     __tablename__ = "users"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    email = Column(String(255), unique=True, nullable=False, index=True)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    email = Column(String(255), nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     full_name = Column(String(150), nullable=False)
-    employee_code = Column(String(50), unique=True, nullable=False, index=True)
-    role = Column(String(20), default="employee", nullable=False) # super_admin, manager, employee
+    employee_code = Column(String(50), nullable=False, index=True)
+    role = Column(String(20), default="employee", nullable=False) # super_admin, admin, manager, employee
     office_id = Column(UUID(as_uuid=True), ForeignKey("offices.id"), nullable=True)
     default_work_mode = Column(String(20), default="on_site", nullable=False) # on_site, remote
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=get_utc_now)
     updated_at = Column(DateTime(timezone=True), default=get_utc_now, onupdate=get_utc_now)
 
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "email", name="uq_tenant_user_email"),
+        UniqueConstraint("tenant_id", "employee_code", name="uq_tenant_user_employee_code"),
+    )
+
+    tenant = relationship("Tenant", back_populates="users")
     office = relationship("Office", back_populates="users")
     biometric_profile = relationship("BiometricProfile", back_populates="user", uselist=False)
     devices = relationship("UserDevice", back_populates="user")
@@ -85,6 +108,7 @@ class WorkModeOverride(Base):
     __tablename__ = "work_mode_overrides"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     effective_date = Column(Date, nullable=False)
     assigned_mode = Column(String(20), nullable=False) # on_site, remote
@@ -100,6 +124,7 @@ class FaceScanInvite(Base):
     __tablename__ = "face_scan_invites"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     invite_token = Column(String(255), unique=True, nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
@@ -110,6 +135,7 @@ class AttendanceRecord(Base):
     __tablename__ = "attendance_records"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     date = Column(Date, nullable=False)
     check_in_time = Column(DateTime(timezone=True), nullable=False)
@@ -129,12 +155,14 @@ class AttendanceRecord(Base):
         UniqueConstraint("user_id", "date", name="uq_user_attendance_date"),
     )
 
+    tenant = relationship("Tenant", back_populates="attendance_records")
     user = relationship("User", back_populates="attendance_records")
 
 class Leave(Base):
     __tablename__ = "leaves"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     start_date = Column(Date, nullable=False)
     end_date = Column(Date, nullable=False)

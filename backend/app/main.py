@@ -6,6 +6,7 @@ from app.api.auth import router as auth_router
 from app.api.biometrics import router as biometrics_router
 from app.api.work_modes import router as work_modes_router
 from app.api.attendance import router as attendance_router
+from app.api.management import router as management_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -26,6 +27,7 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(biometrics_router, prefix="/api")
 app.include_router(work_modes_router, prefix="/api")
 app.include_router(attendance_router, prefix="/api")
+app.include_router(management_router, prefix="/api")
 
 @app.get("/")
 async def root():

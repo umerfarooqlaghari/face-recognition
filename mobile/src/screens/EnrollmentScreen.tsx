@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { enrollFaceReference } from '../services/api';
+import { CloseIcon, FlipCameraIcon, CheckIcon } from '../components/SvgIcons';
 
 const { width, height } = Dimensions.get('window');
 
@@ -102,13 +103,13 @@ export default function EnrollmentScreen({
         {/* Top Header */}
         <View style={styles.overlayHeader}>
           <TouchableOpacity style={styles.closeBtn} onPress={onCancel}>
-            <Text style={styles.closeBtnText}>✕</Text>
+            <CloseIcon size={18} color="#ffffff" />
           </TouchableOpacity>
           <View style={styles.guideBadge}>
             <Text style={styles.guideBadgeText}>BIOMETRIC ENROLLMENT</Text>
           </View>
           <TouchableOpacity style={styles.flipBtn} onPress={toggleCameraFacing}>
-            <Text style={styles.flipBtnText}>🔄</Text>
+            <FlipCameraIcon size={20} color="#ffffff" />
           </TouchableOpacity>
         </View>
 
@@ -122,7 +123,7 @@ export default function EnrollmentScreen({
             {enrollStatus === 'uploading'
               ? 'Analyzing facial landmarks & computing 512D ArcFace vector...'
               : enrollStatus === 'success'
-              ? '✓ Face Reference Enrolled Successfully!'
+              ? 'Face Reference Enrolled Successfully'
               : 'Fit your face within the oval. Look directly at the camera.'}
           </Text>
         </View>
@@ -131,12 +132,12 @@ export default function EnrollmentScreen({
         <View style={styles.controlsContainer}>
           {enrollStatus === 'uploading' ? (
             <View style={styles.loadingBox}>
-              <ActivityIndicator size="large" color="#38bdf8" />
+              <ActivityIndicator size="large" color="#ffffff" />
               <Text style={styles.loadingText}>Registering with pgvector...</Text>
             </View>
           ) : enrollStatus === 'success' ? (
             <View style={styles.successBox}>
-              <Text style={styles.successIcon}>✓</Text>
+              <CheckIcon size={26} color="#059669" />
               <Text style={styles.successText}>Enrolled & Indexed</Text>
             </View>
           ) : (

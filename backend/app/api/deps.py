@@ -34,3 +34,19 @@ async def get_current_user(
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user account")
     return user
+
+async def get_current_tenant_id(
+    current_user: User = Depends(get_current_user)
+) -> uuid.UUID:
+    return current_user.tenant_id
+
+async def require_admin(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    if current_user.role not in ("super_admin", "admin", "manager"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access restricted to management administrators"
+        )
+    return current_user
+

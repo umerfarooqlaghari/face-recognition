@@ -14,6 +14,7 @@ import {
 import { loginWithPassword, loginWithBiometrics, checkBiometricsAvailable } from '../services/auth';
 import { getDeviceTelemetry } from '../services/device';
 import { AuthTokens, DeviceTelemetry } from '../types';
+import { ShieldIcon, FingerprintIcon, KeyIcon, MailIcon } from '../components/SvgIcons';
 
 interface LoginScreenProps {
   onLoginSuccess: (tokens: AuthTokens) => void;
@@ -45,7 +46,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       const tokens = await loginWithPassword(email.trim().toLowerCase(), password);
       onLoginSuccess(tokens);
     } catch (err: any) {
-      Alert.alert('Login Failed', err.message || 'Invalid credentials');
+      Alert.alert('Authentication Failed', err.message || 'Invalid credentials');
     } finally {
       setLoading(false);
     }
@@ -70,36 +71,47 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={styles.container}
     >
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         <View style={styles.headerContainer}>
           <View style={styles.logoBadge}>
-            <Text style={styles.logoBadgeText}>⚡ ATTEND</Text>
+            <ShieldIcon size={16} color="#1e3a8a" />
+            <Text style={styles.logoBadgeText}>ENTERPRISE PORTAL</Text>
           </View>
           <Text style={styles.title}>Biometric Attendance</Text>
-          <Text style={styles.subtitle}>Sign in to your Employee or Management portal</Text>
+          <Text style={styles.subtitle}>Sign in with your organization credentials</Text>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.label}>Work Email</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="john.doe@company.com"
-            placeholderTextColor="#94a3b8"
-            keyboardType="email-address"
-            autoCapitalize="none"
-            value={email}
-            onChangeText={setEmail}
-          />
+          <View style={styles.inputGroup}>
+            <View style={styles.labelRow}>
+              <MailIcon size={14} color="#64748b" />
+              <Text style={styles.label}>Work Email</Text>
+            </View>
+            <TextInput
+              style={styles.input}
+              placeholder="name@company.com"
+              placeholderTextColor="#94a3b8"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              value={email}
+              onChangeText={setEmail}
+            />
+          </View>
 
-          <Text style={[styles.label, { marginTop: 16 }]}>Password</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="••••••••••••"
-            placeholderTextColor="#94a3b8"
-            secureTextEntry
-            value={password}
-            onChangeText={setPassword}
-          />
+          <View style={[styles.inputGroup, { marginTop: 16 }]}>
+            <View style={styles.labelRow}>
+              <KeyIcon size={14} color="#64748b" />
+              <Text style={styles.label}>Password</Text>
+            </View>
+            <TextInput
+              style={styles.input}
+              placeholder="Enter your assigned password"
+              placeholderTextColor="#94a3b8"
+              secureTextEntry
+              value={password}
+              onChangeText={setPassword}
+            />
+          </View>
 
           <TouchableOpacity
             style={[styles.primaryButton, loading && styles.buttonDisabled]}
@@ -109,7 +121,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
             {loading ? (
               <ActivityIndicator color="#ffffff" />
             ) : (
-              <Text style={styles.primaryButtonText}>Sign In with Password</Text>
+              <Text style={styles.primaryButtonText}>Sign In</Text>
             )}
           </TouchableOpacity>
 
@@ -119,16 +131,17 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               onPress={handleBiometricLogin}
               disabled={loading}
             >
-              <Text style={styles.biometricButtonText}>Touch ID / Face ID / Thumb</Text>
+              <FingerprintIcon size={18} color="#0f172a" />
+              <Text style={styles.biometricButtonText}>Sign In with Face ID / Touch ID</Text>
             </TouchableOpacity>
           )}
         </View>
 
         {deviceInfo && (
           <View style={styles.deviceCard}>
-            <Text style={styles.deviceTitle}>BOUND DEVICE HARDWARE</Text>
+            <Text style={styles.deviceTitle}>HARDWARE SECURITY BINDING</Text>
             <Text style={styles.deviceText}>Model: {deviceInfo.device_model} ({deviceInfo.os_name} {deviceInfo.os_version})</Text>
-            <Text style={styles.deviceIdText}>ID: {deviceInfo.device_id}</Text>
+            <Text style={styles.deviceIdText}>Device ID: {deviceInfo.device_id}</Text>
           </View>
         )}
       </ScrollView>
@@ -139,7 +152,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#090d16',
+    backgroundColor: '#f8fafc',
   },
   scrollContent: {
     padding: 24,
@@ -151,65 +164,78 @@ const styles = StyleSheet.create({
     marginBottom: 32,
   },
   logoBadge: {
-    backgroundColor: '#1e293b',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#334155',
-    marginBottom: 12,
+    borderColor: '#bfdbfe',
+    marginBottom: 16,
   },
   logoBadgeText: {
-    color: '#38bdf8',
+    color: '#1e3a8a',
     fontSize: 12,
     fontWeight: '700',
-    letterSpacing: 1,
+    letterSpacing: 0.8,
   },
   title: {
     fontSize: 26,
     fontWeight: '800',
-    color: '#f8fafc',
+    color: '#0f172a',
     textAlign: 'center',
+    letterSpacing: -0.5,
   },
   subtitle: {
     fontSize: 14,
-    color: '#94a3b8',
+    color: '#64748b',
     marginTop: 6,
     textAlign: 'center',
   },
   card: {
-    backgroundColor: '#131b2e',
-    borderRadius: 20,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
     padding: 24,
     borderWidth: 1,
-    borderColor: '#1e293b',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
+    borderColor: '#e2e8f0',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 2,
+  },
+  inputGroup: {
+    width: '100%',
+  },
+  labelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6,
   },
   label: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#cbd5e1',
-    marginBottom: 6,
+    color: '#334155',
   },
   input: {
-    backgroundColor: '#0b1120',
+    backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: 12,
-    paddingHorizontal: 16,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    paddingHorizontal: 14,
     paddingVertical: 12,
-    color: '#f8fafc',
+    color: '#0f172a',
     fontSize: 15,
   },
   primaryButton: {
-    backgroundColor: '#2563eb',
-    borderRadius: 12,
+    backgroundColor: '#0f172a',
+    borderRadius: 10,
     paddingVertical: 14,
     alignItems: 'center',
-    marginTop: 24,
+    marginTop: 22,
   },
   buttonDisabled: {
     opacity: 0.6,
@@ -220,41 +246,44 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   biometricButton: {
-    backgroundColor: '#1e293b',
-    borderWidth: 1,
-    borderColor: '#38bdf8',
-    borderRadius: 12,
-    paddingVertical: 13,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    paddingVertical: 13,
     marginTop: 12,
   },
   biometricButtonText: {
-    color: '#38bdf8',
+    color: '#0f172a',
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '600',
   },
   deviceCard: {
     marginTop: 24,
-    backgroundColor: '#0d1526',
-    borderRadius: 14,
-    padding: 14,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 16,
     borderWidth: 1,
-    borderColor: '#1e293b',
+    borderColor: '#e2e8f0',
   },
   deviceTitle: {
     fontSize: 11,
     fontWeight: '800',
     color: '#64748b',
-    letterSpacing: 0.5,
-    marginBottom: 4,
+    letterSpacing: 0.8,
+    marginBottom: 6,
   },
   deviceText: {
     fontSize: 12,
-    color: '#94a3b8',
+    color: '#334155',
   },
   deviceIdText: {
-    fontSize: 10,
-    color: '#475569',
+    fontSize: 11,
+    color: '#64748b',
     marginTop: 4,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
   },

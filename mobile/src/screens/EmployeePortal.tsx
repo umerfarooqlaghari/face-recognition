@@ -17,6 +17,18 @@ import {
   getAttendanceHistory,
   markAttendanceCheckOut,
 } from '../services/api';
+import {
+  UserIcon,
+  CameraIcon,
+  RefreshIcon,
+  GlobeIcon,
+  LocationPinIcon,
+  AlertIcon,
+  CheckIcon,
+  LogOutIcon,
+  ChevronRightIcon,
+  ClockIcon,
+} from '../components/SvgIcons';
 
 interface EmployeePortalProps {
   user: User;
@@ -123,41 +135,52 @@ export default function EmployeePortal({
   const handleCheckOut = async () => {
     try {
       await markAttendanceCheckOut();
-      Alert.alert('Checked Out', 'Your check-out timestamp has been logged.');
-      await loadAttendanceData();
+      Alert.alert('Checked Out', 'Your check-out time has been recorded successfully.');
+      loadAttendanceData();
     } catch (err: any) {
-      Alert.alert('Check-Out Error', err.message);
+      Alert.alert('Check-Out Failed', err.message);
     }
   };
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {/* Header */}
-      <View style={styles.header}>
+      {/* Header Bar */}
+      <View style={styles.topBar}>
         <View>
           <Text style={styles.greeting}>Welcome back,</Text>
-          <Text style={styles.name}>{user.full_name}</Text>
-          <Text style={styles.code}>{user.employee_code} • {user.email}</Text>
+          <Text style={styles.userName}>{user.full_name}</Text>
+          <Text style={styles.userCode}>CODE: {user.employee_code}</Text>
         </View>
-
-        {onSwitchPortal && (
-          <TouchableOpacity style={styles.switchButton} onPress={onSwitchPortal}>
-            <Text style={styles.switchButtonText}>Manager View ➔</Text>
-          </TouchableOpacity>
-        )}
+        <TouchableOpacity style={styles.logoutBtn} onPress={onLogout}>
+          <LogOutIcon size={14} color="#64748b" />
+          <Text style={styles.logoutText}>Sign Out</Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Work Mode Card with Override Notice */}
-      <View style={[styles.card, styles.modeCard]}>
-        <View style={styles.badgeRow}>
-          <View style={[styles.badge, isRemote ? styles.remoteBadge : styles.onSiteBadge]}>
-            <Text style={[styles.badgeText, isRemote ? styles.remoteBadgeText : styles.onSiteBadgeText]}>
-              {isRemote ? '🌐 REMOTE WORKER' : '📍 ON-SITE WORKER'}
+      {/* Switch to Management if authorized */}
+      {user.role !== 'employee' && onSwitchPortal && (
+        <TouchableOpacity style={styles.switchButton} onPress={onSwitchPortal}>
+          <Text style={styles.switchButtonText}>Management Dashboard</Text>
+          <ChevronRightIcon size={14} color="#1e3a8a" />
+        </TouchableOpacity>
+      )}
+
+      {/* Work Mode Card */}
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <View style={styles.modePill}>
+            {isRemote ? (
+              <GlobeIcon size={14} color="#1e3a8a" />
+            ) : (
+              <LocationPinIcon size={14} color="#1e3a8a" />
+            )}
+            <Text style={styles.modePillText}>
+              {isRemote ? 'REMOTE WORKER' : 'ON-SITE WORKER'}
             </Text>
           </View>
           {isOverride && (
             <View style={styles.overridePill}>
-              <Text style={styles.overridePillText}>★ Date Override Active</Text>
+              <Text style={styles.overridePillText}>Date Override Active</Text>
             </View>
           )}
         </View>
@@ -165,143 +188,151 @@ export default function EmployeePortal({
         <Text style={styles.modeDescription}>
           {isRemote
             ? overrideReason
-              ? `Override reason: "${overrideReason}". You are approved to check in remotely today without geofence limits.`
-              : 'You are approved for remote attendance today. Face scan verification will mark your check-in from any location.'
-            : `You are scheduled for On-Site attendance at ${officeName}. You must be within ${radiusMeters}m of the office to check in.`}
+              ? `Override reason: "${overrideReason}". Approved for remote check-in today.`
+              : 'Configured for Remote attendance. Geofencing requirement is waived.'
+            : `Scheduled for On-Site attendance at ${officeName}. You must be within ${radiusMeters}m to mark attendance.`}
         </Text>
+
+        {/* GPS Geofence Status */}
+        <View style={styles.locSection}>
+          <View style={styles.locStatusRow}>
+            <Text style={styles.locStatusLabel}>GEOFENCE AUDIT STATUS</Text>
+            <TouchableOpacity onPress={loadWorkModeAndLocation} disabled={locLoading} style={styles.refreshLocBtn}>
+              {locLoading ? (
+                <ActivityIndicator size="small" color="#1e3a8a" />
+              ) : (
+                <View style={styles.inlineRow}>
+                  <RefreshIcon size={12} color="#1e3a8a" />
+                  <Text style={styles.refreshLocText}>Refresh GPS</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {locError ? (
+            <View style={styles.errorBox}>
+              <AlertIcon size={16} color="#dc2626" />
+              <Text style={styles.errorText}>{locError}</Text>
+            </View>
+          ) : isRemote ? (
+            <View style={styles.statusBoxInfo}>
+              <View style={styles.inlineRow}>
+                <GlobeIcon size={15} color="#1e40af" />
+                <Text style={styles.statusBoxTitle}>Geofence Constraint Waived</Text>
+              </View>
+              <Text style={styles.statusBoxSubtitle}>
+                GPS Coordinates recorded for audit trail: {coords ? `${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}` : 'Detecting...'}
+              </Text>
+            </View>
+          ) : isWithinGeofence ? (
+            <View style={styles.statusBoxSuccess}>
+              <View style={styles.inlineRow}>
+                <CheckIcon size={15} color="#059669" />
+                <Text style={styles.statusBoxTitleSuccess}>Inside Office Zone ({distanceMeters?.toFixed(0)}m)</Text>
+              </View>
+              <Text style={styles.statusBoxSubtitleSuccess}>
+                Authorized to mark attendance at {officeName}
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.statusBoxWarning}>
+              <View style={styles.inlineRow}>
+                <AlertIcon size={15} color="#b45309" />
+                <Text style={styles.statusBoxTitleWarning}>Outside Office Zone ({distanceMeters?.toFixed(0)}m)</Text>
+              </View>
+              <Text style={styles.statusBoxSubtitleWarning}>
+                Move within {radiusMeters}m of {officeName} to verify
+              </Text>
+            </View>
+          )}
+        </View>
       </View>
 
-      {/* Geofence Live GPS Distance Widget */}
+      {/* Today Attendance Action Card */}
       <View style={styles.card}>
-        <View style={styles.widgetHeader}>
-          <Text style={styles.cardTitle}>Location & Geofence</Text>
-          <TouchableOpacity
-            style={styles.refreshLocBtn}
-            onPress={loadWorkModeAndLocation}
-            disabled={locLoading}
-          >
-            {locLoading ? (
-              <ActivityIndicator size="small" color="#38bdf8" />
-            ) : (
-              <Text style={styles.refreshLocText}>🔄 Refresh GPS</Text>
-            )}
-          </TouchableOpacity>
-        </View>
+        <Text style={styles.cardSectionTitle}>TODAY'S VERIFICATION STATUS</Text>
 
-        {locError ? (
-          <View style={styles.errorBox}>
-            <Text style={styles.errorText}>⚠️ {locError}</Text>
-          </View>
-        ) : isRemote ? (
-          <View style={[styles.statusBox, styles.remoteBox]}>
-            <Text style={styles.statusBoxTitle}>🌐 Geofence Constraint Waived</Text>
-            <Text style={styles.statusBoxSubtitle}>
-              GPS Coordinates recorded for audit log: {coords ? `${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}` : 'Fetching...'}
-            </Text>
-          </View>
-        ) : isWithinGeofence === true ? (
-          <View style={[styles.statusBox, styles.successBox]}>
-            <Text style={styles.statusBoxTitle}>✓ Inside Office Zone ({distanceMeters?.toFixed(0)}m away)</Text>
-            <Text style={styles.statusBoxSubtitle}>
-              You are within the {radiusMeters}m geofence of {officeName}. Attendance ready to mark.
-            </Text>
-          </View>
-        ) : isWithinGeofence === false ? (
-          <View style={[styles.statusBox, styles.warningBox]}>
-            <Text style={styles.statusBoxTitle}>⚠️ Outside Office Zone ({distanceMeters?.toFixed(0)}m away)</Text>
-            <Text style={styles.statusBoxSubtitle}>
-              Limit is {radiusMeters}m. Please step closer to {officeName} to enable check-in.
-            </Text>
+        {todayAttendance?.checked_in ? (
+          <View style={styles.checkedInBox}>
+            <View style={styles.checkedInRow}>
+              <View style={styles.inlineRow}>
+                <CheckIcon size={18} color="#059669" />
+                <Text style={styles.checkedInText}>Present</Text>
+              </View>
+              <Text style={styles.checkInTimeText}>
+                {new Date(todayAttendance.record?.check_in_time).toLocaleTimeString()}
+              </Text>
+            </View>
+
+            {!todayAttendance?.checked_out ? (
+              <TouchableOpacity style={styles.checkoutButton} onPress={handleCheckOut}>
+                <Text style={styles.checkoutButtonText}>Check Out for the Day</Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.completedBox}>
+                <CheckIcon size={14} color="#059669" />
+                <Text style={styles.completedText}>Day Completed (Checked out)</Text>
+              </View>
+            )}
           </View>
         ) : (
-          <ActivityIndicator size="small" color="#38bdf8" style={{ marginVertical: 12 }} />
-        )}
-      </View>
-
-      {/* Check In Action Card */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Today's Attendance</Text>
-        <Text style={styles.cardSubtitle}>
-          Status:{' '}
-          <Text style={todayAttendance?.has_checked_in ? styles.statusPresent : styles.statusPending}>
-            {todayAttendance?.has_checked_in
-              ? `Present (Checked in at ${new Date(todayAttendance.record?.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`
-              : 'Pending Check-In'}
-          </Text>
-        </Text>
-
-        {!todayAttendance?.has_checked_in ? (
           <TouchableOpacity
             style={[
               styles.scanButton,
-              !isRemote && isWithinGeofence === false && styles.scanButtonBlocked
+              !isRemote && isWithinGeofence === false && styles.scanButtonDisabled,
             ]}
             onPress={handleFaceScanTrigger}
+            disabled={!isRemote && isWithinGeofence === false}
           >
-            <Text style={styles.scanButtonIcon}>📸</Text>
+            <CameraIcon size={20} color="#ffffff" />
             <Text style={styles.scanButtonText}>
               {!isRemote && isWithinGeofence === false
-                ? `Outside 200m Zone (${distanceMeters?.toFixed(0)}m)`
-                : 'Mark Attendance with Face Scan'}
+                ? `Outside ${radiusMeters}m Zone (${distanceMeters?.toFixed(0)}m)`
+                : 'Scan Face to Check In'}
             </Text>
           </TouchableOpacity>
-        ) : !todayAttendance?.has_checked_out ? (
-          <TouchableOpacity style={styles.checkoutButton} onPress={handleCheckOut}>
-            <Text style={styles.checkoutButtonText}>👋 Tap to Check Out</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.completedBox}>
-            <Text style={styles.completedText}>✓ Day Completed (Checked out)</Text>
-          </View>
         )}
-
-        <Text style={styles.scanHint}>
-          Liveness detection enabled. Photos or screen recordings will be rejected.
-        </Text>
       </View>
 
       {/* Attendance History */}
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Recent Activity</Text>
+        <Text style={styles.cardSectionTitle}>ATTENDANCE LOG HISTORY</Text>
         {history.length === 0 ? (
-          <Text style={{ color: '#64748b', fontSize: 13, marginTop: 8 }}>No attendance punches logged yet.</Text>
+          <Text style={styles.emptyText}>No previous attendance records found.</Text>
         ) : (
-          history.slice(0, 5).map((rec, i) => (
-            <View key={rec.id || i} style={styles.historyItem}>
+          history.slice(0, 5).map((rec: any) => (
+            <View key={rec.id} style={styles.historyRow}>
               <View>
                 <Text style={styles.historyDate}>{rec.date}</Text>
-                <Text style={styles.historyType}>
-                  {rec.verification_type === 'face_geo' ? '📍 Face + Geo (On-Site)' : '🌐 Face Scan (Remote)'}
-                </Text>
+                <View style={[styles.inlineRow, { marginTop: 2 }]}>
+                  {rec.verification_type === 'face_geo' ? (
+                    <LocationPinIcon size={12} color="#64748b" />
+                  ) : (
+                    <GlobeIcon size={12} color="#64748b" />
+                  )}
+                  <Text style={styles.historyType}>
+                    {rec.verification_type === 'face_geo' ? 'Face + Geofence' : 'Face Remote'}
+                  </Text>
+                </View>
               </View>
-              <Text style={styles.historyStatus}>
-                {new Date(rec.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {rec.status.toUpperCase()}
-              </Text>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={styles.historyTime}>
+                  {new Date(rec.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </Text>
+                <Text style={styles.historyScore}>{(rec.similarity_score * 100).toFixed(0)}% match</Text>
+              </View>
             </View>
           ))
         )}
       </View>
 
-      {/* Face Reference Profile Status Card */}
+      {/* Biometric Reference Enrollment CTA */}
       {onOpenEnrollment && (
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Biometric Face Reference</Text>
-          <Text style={styles.cardSubtitle}>
-            Your reference scan is encoded into a 512D ArcFace vector stored in Render PostgreSQL with pgvector.
-          </Text>
-          <TouchableOpacity
-            style={[styles.scanButton, { backgroundColor: '#1e293b', borderWidth: 1, borderColor: '#38bdf8' }]}
-            onPress={onOpenEnrollment}
-          >
-            <Text style={styles.scanButtonIcon}>👤</Text>
-            <Text style={[styles.scanButtonText, { color: '#38bdf8' }]}>Enroll / Update Face Profile</Text>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity style={styles.enrollmentCTA} onPress={onOpenEnrollment}>
+          <UserIcon size={18} color="#0f172a" />
+          <Text style={styles.enrollmentCTAText}>Update Face Biometric Reference</Text>
+        </TouchableOpacity>
       )}
-
-      <TouchableOpacity style={styles.logoutButton} onPress={onLogout}>
-        <Text style={styles.logoutButtonText}>Sign Out</Text>
-      </TouchableOpacity>
     </ScrollView>
   );
 }
@@ -309,13 +340,14 @@ export default function EmployeePortal({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#090d16',
+    backgroundColor: '#f8fafc',
   },
   content: {
     padding: 20,
-    paddingTop: 40,
+    paddingTop: 54,
+    paddingBottom: 40,
   },
-  header: {
+  topBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
@@ -323,245 +355,326 @@ const styles = StyleSheet.create({
   },
   greeting: {
     fontSize: 13,
-    color: '#94a3b8',
+    color: '#64748b',
     fontWeight: '600',
   },
-  name: {
+  userName: {
     fontSize: 22,
     fontWeight: '800',
-    color: '#f8fafc',
-    marginTop: 2,
+    color: '#0f172a',
+    letterSpacing: -0.5,
   },
-  code: {
-    fontSize: 12,
-    color: '#64748b',
-    marginTop: 2,
-  },
-  switchButton: {
-    backgroundColor: '#1e293b',
-    borderWidth: 1,
-    borderColor: '#38bdf8',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-  switchButtonText: {
-    color: '#38bdf8',
-    fontSize: 12,
+  userCode: {
+    fontSize: 11,
+    color: '#1e3a8a',
     fontWeight: '700',
+    fontFamily: 'monospace',
+    marginTop: 2,
   },
-  card: {
-    backgroundColor: '#131b2e',
-    borderRadius: 16,
-    padding: 18,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#1e293b',
-  },
-  modeCard: {
-    backgroundColor: '#0f172a',
-    borderColor: '#334155',
-  },
-  badgeRow: {
+  logoutBtn: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
-  },
-  badge: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    gap: 6,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 8,
   },
-  onSiteBadge: {
-    backgroundColor: '#14532d',
+  logoutText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
   },
-  onSiteBadgeText: {
-    color: '#4ade80',
+  switchButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginBottom: 16,
+  },
+  switchButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1e3a8a',
+  },
+  card: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 16,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  modePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  modePillText: {
     fontSize: 11,
     fontWeight: '800',
-  },
-  remoteBadge: {
-    backgroundColor: '#1e1b4b',
-  },
-  remoteBadgeText: {
-    color: '#a78bfa',
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  badgeText: {
-    fontSize: 11,
-    fontWeight: '800',
+    color: '#1e3a8a',
+    letterSpacing: 0.5,
   },
   overridePill: {
-    backgroundColor: '#854d0e',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
   overridePillText: {
-    color: '#fef08a',
-    fontSize: 10,
-    fontWeight: '800',
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#92400e',
   },
   modeDescription: {
     fontSize: 13,
-    color: '#94a3b8',
+    color: '#475569',
     lineHeight: 18,
+    marginBottom: 14,
   },
-  widgetHeader: {
+  locSection: {
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+    paddingTop: 12,
+  },
+  locStatusRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 8,
+  },
+  locStatusLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#64748b',
+    letterSpacing: 0.8,
   },
   refreshLocBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    padding: 4,
   },
   refreshLocText: {
-    color: '#38bdf8',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  statusBox: {
-    borderRadius: 12,
-    padding: 12,
-  },
-  successBox: {
-    backgroundColor: '#14532d33',
-    borderColor: '#15803d',
-    borderWidth: 1,
-  },
-  warningBox: {
-    backgroundColor: '#7f1d1d33',
-    borderColor: '#b91c1c',
-    borderWidth: 1,
-  },
-  remoteBox: {
-    backgroundColor: '#3b076433',
-    borderColor: '#7e22ce',
-    borderWidth: 1,
-  },
-  statusBoxTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#f8fafc',
-  },
-  statusBoxSubtitle: {
     fontSize: 11,
-    color: '#94a3b8',
-    marginTop: 4,
+    fontWeight: '700',
+    color: '#1e3a8a',
+  },
+  inlineRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   errorBox: {
-    backgroundColor: '#450a0a',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
     borderRadius: 8,
     padding: 10,
   },
   errorText: {
-    color: '#f87171',
     fontSize: 12,
+    color: '#dc2626',
+    flex: 1,
   },
-  cardTitle: {
-    fontSize: 16,
+  statusBoxInfo: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 8,
+    padding: 12,
+  },
+  statusBoxTitle: {
+    fontSize: 12,
     fontWeight: '700',
-    color: '#f8fafc',
-    marginBottom: 4,
+    color: '#1e40af',
   },
-  cardSubtitle: {
-    fontSize: 13,
-    color: '#94a3b8',
-    marginBottom: 16,
+  statusBoxSubtitle: {
+    fontSize: 11,
+    color: '#3b82f6',
+    marginTop: 4,
   },
-  statusPending: {
-    color: '#f59e0b',
+  statusBoxSuccess: {
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+    borderRadius: 8,
+    padding: 12,
+  },
+  statusBoxTitleSuccess: {
+    fontSize: 12,
     fontWeight: '700',
+    color: '#065f46',
   },
-  statusPresent: {
-    color: '#4ade80',
+  statusBoxSubtitleSuccess: {
+    fontSize: 11,
+    color: '#059669',
+    marginTop: 4,
+  },
+  statusBoxWarning: {
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    borderRadius: 8,
+    padding: 12,
+  },
+  statusBoxTitleWarning: {
+    fontSize: 12,
     fontWeight: '700',
+    color: '#92400e',
+  },
+  statusBoxSubtitleWarning: {
+    fontSize: 11,
+    color: '#b45309',
+    marginTop: 4,
+  },
+  cardSectionTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748b',
+    letterSpacing: 0.8,
+    marginBottom: 12,
   },
   scanButton: {
-    backgroundColor: '#2563eb',
-    borderRadius: 14,
-    paddingVertical: 16,
     flexDirection: 'row',
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
+    backgroundColor: '#0f172a',
+    borderRadius: 10,
+    paddingVertical: 14,
   },
-  scanButtonBlocked: {
-    backgroundColor: '#475569',
-  },
-  scanButtonIcon: {
-    fontSize: 20,
+  scanButtonDisabled: {
+    backgroundColor: '#cbd5e1',
   },
   scanButtonText: {
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '700',
   },
+  checkedInBox: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    padding: 14,
+  },
+  checkedInRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  checkedInText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  checkInTimeText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#475569',
+  },
   checkoutButton: {
-    backgroundColor: '#ea580c',
-    borderRadius: 14,
-    paddingVertical: 16,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    paddingVertical: 10,
     alignItems: 'center',
   },
   checkoutButtonText: {
-    color: '#ffffff',
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '700',
+    color: '#0f172a',
   },
   completedBox: {
-    backgroundColor: '#14532d',
-    borderRadius: 12,
-    paddingVertical: 14,
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 6,
+    justifyContent: 'center',
+    paddingVertical: 6,
   },
   completedText: {
-    color: '#4ade80',
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#059669',
   },
-  scanHint: {
-    fontSize: 11,
-    color: '#64748b',
+  emptyText: {
+    fontSize: 13,
+    color: '#94a3b8',
     textAlign: 'center',
-    marginTop: 10,
+    paddingVertical: 12,
   },
-  historyItem: {
+  historyRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: 10,
-    borderTopWidth: 1,
-    borderColor: '#1e293b',
-    marginTop: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
   },
   historyDate: {
-    color: '#f1f5f9',
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '700',
+    color: '#0f172a',
   },
   historyType: {
-    color: '#64748b',
     fontSize: 11,
-    marginTop: 2,
+    color: '#64748b',
   },
-  historyStatus: {
-    color: '#4ade80',
-    fontSize: 12,
-    fontWeight: '700',
+  historyTime: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#334155',
   },
-  logoutButton: {
-    paddingVertical: 14,
+  historyScore: {
+    fontSize: 11,
+    color: '#059669',
+    fontWeight: '600',
+  },
+  enrollmentCTA: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 12,
-    marginBottom: 30,
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    paddingVertical: 12,
+    marginTop: 4,
   },
-  logoutButtonText: {
-    color: '#ef4444',
-    fontSize: 14,
+  enrollmentCTAText: {
+    fontSize: 13,
     fontWeight: '700',
+    color: '#0f172a',
   },
 });

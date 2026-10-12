@@ -29,10 +29,11 @@ async def create_office(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    if current_user.role not in ["manager", "super_admin"]:
+    if current_user.role not in ["manager", "super_admin", "admin"]:
         raise HTTPException(status_code=403, detail="Only managers or administrators can create offices")
 
     new_office = Office(
+        tenant_id=current_user.tenant_id,
         name=req.name,
         latitude=req.latitude,
         longitude=req.longitude,
@@ -45,8 +46,11 @@ async def create_office(
     return new_office
 
 @router.get("/offices", response_model=List[OfficeResponse])
-async def list_offices(db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(Office))
+async def list_offices(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    res = await db.execute(select(Office).where(Office.tenant_id == current_user.tenant_id))
     return res.scalars().all()
 
 # --- Work Mode Overrides ---
@@ -57,20 +61,23 @@ async def set_work_mode_override(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    if current_user.role not in ["manager", "super_admin"]:
+    if current_user.role not in ["manager", "super_admin", "admin"]:
         raise HTTPException(status_code=403, detail="Only managers or administrators can set work mode overrides")
 
-    # Verify target employee
-    emp_res = await db.execute(select(User).where(User.id == req.user_id))
+    # Verify target employee within same tenant
+    emp_res = await db.execute(
+        select(User).where(User.id == req.user_id, User.tenant_id == current_user.tenant_id)
+    )
     emp = emp_res.scalar_one_or_none()
     if not emp:
-        raise HTTPException(status_code=404, detail="Employee not found")
+        raise HTTPException(status_code=404, detail="Employee not found in your organization")
 
     # Upsert override for employee and effective_date
     existing_res = await db.execute(
         select(WorkModeOverride).where(
             WorkModeOverride.user_id == req.user_id,
-            WorkModeOverride.effective_date == req.effective_date
+            WorkModeOverride.effective_date == req.effective_date,
+            WorkModeOverride.tenant_id == current_user.tenant_id
         )
     )
     override = existing_res.scalar_one_or_none()
@@ -81,6 +88,7 @@ async def set_work_mode_override(
         override.created_by = current_user.id
     else:
         override = WorkModeOverride(
+            tenant_id=current_user.tenant_id,
             user_id=req.user_id,
             effective_date=req.effective_date,
             assigned_mode=req.assigned_mode,

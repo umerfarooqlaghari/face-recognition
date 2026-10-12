@@ -12,7 +12,8 @@ class DeviceTelemetry(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
-    device: DeviceTelemetry
+    device: Optional[DeviceTelemetry] = None
+
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
@@ -31,6 +32,7 @@ class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    tenant_id: uuid.UUID
     email: str
     full_name: str
     employee_code: str

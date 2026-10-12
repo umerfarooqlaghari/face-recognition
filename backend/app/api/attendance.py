@@ -112,6 +112,7 @@ async def mark_attendance_check_in(
 
     # 6. Create Attendance Record
     new_record = AttendanceRecord(
+        tenant_id=current_user.tenant_id,
         user_id=current_user.id,
         date=today,
         check_in_time=now_utc,

@@ -1,0 +1,146 @@
+import uuid
+from datetime import datetime, timezone
+from sqlalchemy import (
+    Column, String, Boolean, DateTime, Date, Float, Integer,
+    ForeignKey, Text, UniqueConstraint
+)
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import declarative_base, relationship
+from pgvector.sqlalchemy import Vector
+
+Base = declarative_base()
+
+def get_utc_now():
+    return datetime.now(timezone.utc)
+
+class Office(Base):
+    __tablename__ = "offices"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(100), nullable=False)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    radius_meters = Column(Integer, default=200, nullable=False)
+    address = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=get_utc_now)
+
+    users = relationship("User", back_populates="office")
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    full_name = Column(String(150), nullable=False)
+    employee_code = Column(String(50), unique=True, nullable=False, index=True)
+    role = Column(String(20), default="employee", nullable=False) # super_admin, manager, employee
+    office_id = Column(UUID(as_uuid=True), ForeignKey("offices.id"), nullable=True)
+    default_work_mode = Column(String(20), default="on_site", nullable=False) # on_site, remote
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=get_utc_now)
+    updated_at = Column(DateTime(timezone=True), default=get_utc_now, onupdate=get_utc_now)
+
+    office = relationship("Office", back_populates="users")
+    biometric_profile = relationship("BiometricProfile", back_populates="user", uselist=False)
+    devices = relationship("UserDevice", back_populates="user")
+    attendance_records = relationship("AttendanceRecord", back_populates="user")
+    leaves = relationship("Leave", back_populates="user", foreign_keys="[Leave.user_id]")
+
+class BiometricProfile(Base):
+    __tablename__ = "biometric_profiles"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    embedding = Column(Vector(512), nullable=False)
+    reference_photo_url = Column(Text, nullable=True)
+    is_verified = Column(Boolean, default=True, nullable=False)
+    enrolled_at = Column(DateTime(timezone=True), default=get_utc_now)
+
+    user = relationship("User", back_populates="biometric_profile")
+
+class UserDevice(Base):
+    __tablename__ = "user_devices"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    device_id = Column(String(255), nullable=False)
+    device_model = Column(String(100), nullable=True)
+    os_name = Column(String(50), nullable=True)
+    os_version = Column(String(50), nullable=True)
+    app_version = Column(String(50), nullable=True)
+    refresh_token_hash = Column(String(255), nullable=False)
+    refresh_token_expires_at = Column(DateTime(timezone=True), nullable=False)
+    is_trusted = Column(Boolean, default=True, nullable=False)
+    last_active_at = Column(DateTime(timezone=True), default=get_utc_now)
+    created_at = Column(DateTime(timezone=True), default=get_utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "device_id", name="uq_user_device"),
+    )
+
+    user = relationship("User", back_populates="devices")
+
+class WorkModeOverride(Base):
+    __tablename__ = "work_mode_overrides"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    effective_date = Column(Date, nullable=False)
+    assigned_mode = Column(String(20), nullable=False) # on_site, remote
+    reason = Column(Text, nullable=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=get_utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "effective_date", name="uq_user_effective_date"),
+    )
+
+class FaceScanInvite(Base):
+    __tablename__ = "face_scan_invites"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    invite_token = Column(String(255), unique=True, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=get_utc_now)
+
+class AttendanceRecord(Base):
+    __tablename__ = "attendance_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    date = Column(Date, nullable=False)
+    check_in_time = Column(DateTime(timezone=True), nullable=False)
+    check_out_time = Column(DateTime(timezone=True), nullable=True)
+    verification_type = Column(String(20), nullable=False) # face_geo, face_remote
+    status = Column(String(20), default="present", nullable=False) # present, late, half_day, absent
+    similarity_score = Column(Float, nullable=False)
+    liveness_score = Column(Float, nullable=False)
+    device_id = Column(UUID(as_uuid=True), ForeignKey("user_devices.id"), nullable=True)
+    check_in_latitude = Column(Float, nullable=True)
+    check_in_longitude = Column(Float, nullable=True)
+    distance_from_office_meters = Column(Float, nullable=True)
+    snapshot_url = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=get_utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "date", name="uq_user_attendance_date"),
+    )
+
+    user = relationship("User", back_populates="attendance_records")
+
+class Leave(Base):
+    __tablename__ = "leaves"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    reason = Column(Text, nullable=False)
+    status = Column(String(20), default="pending", nullable=False) # pending, approved, rejected
+    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=get_utc_now)
+
+    user = relationship("User", back_populates="leaves", foreign_keys=[user_id])

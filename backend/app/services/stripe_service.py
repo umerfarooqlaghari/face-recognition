@@ -77,6 +77,16 @@ async def create_checkout_session(
     effective_seats = max(int(seat_count), 1)
 
     customer_id = tenant.stripe_customer_id
+    if customer_id:
+        try:
+            stripe.Customer.retrieve(customer_id)
+        except Exception:
+            # Customer ID belonged to a previous sandbox/test environment
+            logger.info(f"Customer {customer_id} not found in current Stripe account, resetting...")
+            customer_id = None
+            tenant.stripe_customer_id = None
+            await db.commit()
+
     if not customer_id:
         try:
             customer = stripe.Customer.create(
@@ -196,16 +206,32 @@ async def handle_stripe_webhook_event(payload: bytes, sig_header: str, db: Async
         logger.error(f"Stripe Webhook Signature Verification Failed: {e}")
         raise ValueError(f"Webhook error: {str(e)}")
 
-    event_type = event.get("type")
-    data_object = event.get("data", {}).get("object", {})
+    event_type = getattr(event, "type", None) or (event.get("type") if isinstance(event, dict) else None)
+    event_data = getattr(event, "data", None)
+    if event_data and hasattr(event_data, "object"):
+        data_object = event_data.object
+    elif isinstance(event, dict):
+        data_object = event.get("data", {}).get("object", {})
+    else:
+        data_object = {}
+
+    # Helper function to get attributes from StripeObject or dict
+    def get_val(obj, key, default=None):
+        if hasattr(obj, key):
+            val = getattr(obj, key)
+            return val if val is not None else default
+        elif isinstance(obj, dict):
+            return obj.get(key, default)
+        return default
 
     logger.info(f"Received Stripe Webhook Event: {event_type}")
 
     if event_type == "checkout.session.completed":
         session = data_object
-        tenant_id = session.get("client_reference_id") or session.get("metadata", {}).get("tenant_id")
-        customer_id = session.get("customer")
-        subscription_id = session.get("subscription")
+        meta = get_val(session, "metadata", {})
+        tenant_id = get_val(session, "client_reference_id") or get_val(meta, "tenant_id")
+        customer_id = get_val(session, "customer")
+        subscription_id = get_val(session, "subscription")
 
         if tenant_id:
             import uuid
@@ -234,11 +260,11 @@ async def handle_stripe_webhook_event(payload: bytes, sig_header: str, db: Async
 
     elif event_type in ("customer.subscription.created", "customer.subscription.updated"):
         sub = data_object
-        sub_id = sub.get("id")
-        customer_id = sub.get("customer")
-        status = sub.get("status")
-        trial_end = sub.get("trial_end")
-        current_period_end = sub.get("current_period_end")
+        sub_id = get_val(sub, "id")
+        customer_id = get_val(sub, "customer")
+        status = get_val(sub, "status")
+        trial_end = get_val(sub, "trial_end")
+        current_period_end = get_val(sub, "current_period_end")
 
         # Find tenant by subscription ID or customer ID
         tenant_res = await db.execute(
@@ -257,7 +283,7 @@ async def handle_stripe_webhook_event(payload: bytes, sig_header: str, db: Async
 
     elif event_type == "customer.subscription.deleted":
         sub = data_object
-        sub_id = sub.get("id")
+        sub_id = get_val(sub, "id")
         tenant_res = await db.execute(select(Tenant).where(Tenant.stripe_subscription_id == sub_id))
         tenant = tenant_res.scalar_one_or_none()
         if tenant:
@@ -267,7 +293,7 @@ async def handle_stripe_webhook_event(payload: bytes, sig_header: str, db: Async
 
     elif event_type == "invoice.payment_succeeded":
         invoice = data_object
-        sub_id = invoice.get("subscription")
+        sub_id = get_val(invoice, "subscription")
         if sub_id:
             tenant_res = await db.execute(select(Tenant).where(Tenant.stripe_subscription_id == sub_id))
             tenant = tenant_res.scalar_one_or_none()
@@ -277,7 +303,7 @@ async def handle_stripe_webhook_event(payload: bytes, sig_header: str, db: Async
 
     elif event_type == "invoice.payment_failed":
         invoice = data_object
-        sub_id = invoice.get("subscription")
+        sub_id = get_val(invoice, "subscription")
         if sub_id:
             tenant_res = await db.execute(select(Tenant).where(Tenant.stripe_subscription_id == sub_id))
             tenant = tenant_res.scalar_one_or_none()

@@ -148,6 +148,13 @@ const CopyIcon = ({ size = 14, color = "currentColor" }: { size?: number; color?
   </svg>
 );
 
+const LockIcon = ({ size = 14, color = "currentColor" }: { size?: number; color?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+  </svg>
+);
+
 const TrashIcon = ({ size = 14, color = "currentColor" }: { size?: number; color?: string }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="3 6 5 6 21 6" />
@@ -2397,170 +2404,391 @@ export default function Home() {
         {/* ========================================================================= */}
         {activeTab === "billing" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-            {/* Top Overview Card */}
+            {/* Executive Plan Hero & Subscription Status Card */}
             <div
               style={{
-                background: "#ffffff",
+                background: "linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)",
                 border: "1px solid #e2e8f0",
-                borderRadius: 14,
-                padding: "24px 28px",
-                boxShadow: "0 1px 3px rgba(0, 0, 0, 0.05)",
+                borderRadius: 16,
+                padding: "32px",
+                boxShadow: "0 4px 20px -2px rgba(0, 0, 0, 0.05)",
                 display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                flexWrap: "wrap",
-                gap: 16,
+                flexDirection: "column",
+                gap: 24,
               }}
             >
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      fontWeight: 700,
-                      textTransform: "uppercase",
-                      letterSpacing: 0.5,
-                      padding: "3px 10px",
-                      borderRadius: 12,
-                      background: billingInfo?.subscription_status === "active" ? "#ecfdf5" : "#eff6ff",
-                      color: billingInfo?.subscription_status === "active" ? "#059669" : "#0284c7",
-                      border: `1px solid ${billingInfo?.subscription_status === "active" ? "#a7f3d0" : "#bfdbfe"}`,
-                    }}
-                  >
-                    {billingInfo?.subscription_status === "active" ? "Active Subscription" : "14-Day Free Trial Active"}
-                  </span>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                  flexWrap: "wrap",
+                  gap: 20,
+                  borderBottom: "1px solid #f1f5f9",
+                  paddingBottom: 24,
+                }}
+              >
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.6,
+                        padding: "4px 12px",
+                        borderRadius: 20,
+                        background: billingInfo?.subscription_status === "active" ? "#ecfdf5" : "#eff6ff",
+                        color: billingInfo?.subscription_status === "active" ? "#059669" : "#0284c7",
+                        border: `1px solid ${billingInfo?.subscription_status === "active" ? "#a7f3d0" : "#bfdbfe"}`,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: "50%",
+                          background: billingInfo?.subscription_status === "active" ? "#10b981" : "#0284c7",
+                        }}
+                      />
+                      {billingInfo?.subscription_status === "active" ? "Active Subscription" : "14-Day Free Trial"}
+                    </span>
 
-                  <span style={{ fontSize: 13, color: "#64748b", fontWeight: 500 }}>
-                    {billingInfo?.trial_days_remaining != null
-                      ? `${billingInfo.trial_days_remaining} Days Remaining in Free Trial`
-                      : "14 Days Free, Then $2.00 / User / Month"}
-                  </span>
+                    <span style={{ fontSize: 13, color: "#64748b", fontWeight: 500 }}>
+                      {billingInfo?.trial_days_remaining != null
+                        ? `${billingInfo.trial_days_remaining} days left in trial`
+                        : "14 days free • No charge today"}
+                    </span>
+                  </div>
+
+                  <h2 style={{ fontSize: 26, fontWeight: 800, color: "#0f172a", letterSpacing: -0.5 }}>
+                    Enterprise Workforce Attendance Plan
+                  </h2>
+                  <p style={{ fontSize: 14, color: "#64748b", marginTop: 6, maxWidth: 650, lineHeight: 1.5 }}>
+                    512D deep biometric face verification, campus-grade OpenStreetMap geofencing, multi-tier leave approval routing, and automatic AWS SES invite tokens.
+                  </p>
                 </div>
 
-                <h2 style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", marginTop: 8 }}>
-                  Enterprise Workforce Plan
-                </h2>
-                <p style={{ fontSize: 13, color: "#64748b", marginTop: 4, maxWidth: 640 }}>
-                  Biometric face verification attendance, OpenStreetMap campus geofencing,
-                  manager approval tiers, and automated SES dispatch. Flat rate of $2.00 per active employee per month.
-                </p>
+                <div
+                  style={{
+                    background: "#ffffff",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: 12,
+                    padding: "16px 24px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-end",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+                  }}
+                >
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                    Billed Monthly
+                  </span>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginTop: 4 }}>
+                    <span style={{ fontSize: 32, fontWeight: 800, color: "#0f172a" }}>$2.00</span>
+                    <span style={{ fontSize: 14, color: "#64748b", fontWeight: 500 }}>/ user / month</span>
+                  </div>
+                  <span style={{ fontSize: 12, color: "#10b981", fontWeight: 600, marginTop: 4 }}>
+                    First 14 days free
+                  </span>
+                </div>
               </div>
 
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                {billingInfo?.has_stripe_customer && (
-                  <button
-                    className={styles.btnSecondary}
-                    onClick={handleOpenCustomerPortal}
-                    disabled={billingLoading}
+              {/* Action Buttons & Portal Access */}
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                  gap: 16,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: 10,
+                      background: "#f0fdf4",
+                      border: "1px solid #bbf7d0",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
                   >
-                    <CreditCardIcon size={14} />
-                    <span>Customer Portal (Invoices & Cards)</span>
-                  </button>
-                )}
+                    <CheckCircleIcon size={20} color="#16a34a" />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
+                      Automatic Seat Proration
+                    </div>
+                    <div style={{ fontSize: 12, color: "#64748b" }}>
+                      Adding or removing workforce members updates your Stripe billing automatically.
+                    </div>
+                  </div>
+                </div>
 
-                <button
-                  className={styles.btnPrimary}
-                  onClick={handleStartSubscription}
-                  disabled={billingLoading}
-                  style={{ padding: "10px 22px" }}
-                >
-                  <ZapIcon size={14} color="#ffffff" />
-                  <span>
-                    {billingInfo?.subscription_status === "active"
-                      ? "Update Plan in Stripe"
-                      : "Start 14-Day Free Trial ($2/seat/mo)"}
-                  </span>
-                </button>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  {billingInfo?.has_stripe_customer && (
+                    <button
+                      className={styles.btnSecondary}
+                      onClick={handleOpenCustomerPortal}
+                      disabled={billingLoading}
+                      style={{ padding: "12px 20px" }}
+                    >
+                      <CreditCardIcon size={16} />
+                      <span>Manage Invoices & Payment Cards</span>
+                    </button>
+                  )}
+
+                  <button
+                    className={styles.btnPrimary}
+                    onClick={handleStartSubscription}
+                    disabled={billingLoading}
+                    style={{
+                      padding: "12px 26px",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      boxShadow: "0 4px 14px rgba(79, 70, 229, 0.3)",
+                    }}
+                  >
+                    <ZapIcon size={16} color="#ffffff" />
+                    <span>
+                      {billingInfo?.subscription_status === "active"
+                        ? "Update Subscription via Stripe"
+                        : "Start 14-Day Free Trial Now"}
+                    </span>
+                  </button>
+                </div>
               </div>
             </div>
 
             {/* Pricing Breakdown & Features Grid */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
-              {/* Cost Calculation Card */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 24 }}>
+              {/* Interactive Cost & Seat Breakdown Card */}
               <div
                 style={{
                   background: "#ffffff",
                   border: "1px solid #e2e8f0",
-                  borderRadius: 14,
-                  padding: "24px",
-                  boxShadow: "0 1px 3px rgba(0, 0, 0, 0.05)",
+                  borderRadius: 16,
+                  padding: "28px",
+                  boxShadow: "0 1px 4px rgba(0, 0, 0, 0.04)",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
                 }}
               >
-                <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 16 }}>
-                  Real-time Seat & Cost Calculation
-                </div>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#475569" }}>
-                    <span>Registered Workforce Members</span>
-                    <strong style={{ color: "#0f172a" }}>{billingInfo?.seat_count || employees.length} Users</strong>
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#475569" }}>
-                    <span>Rate Per Employee</span>
-                    <strong style={{ color: "#0f172a" }}>$2.00 USD / month</strong>
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#475569" }}>
-                    <span>Trial Period</span>
-                    <span style={{ color: "#059669", fontWeight: 600 }}>14 Days Free ($0.00 today)</span>
-                  </div>
-
-                  <div
-                    style={{
-                      borderTop: "1px solid #f1f5f9",
-                      paddingTop: 12,
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                    }}
-                  >
-                    <span style={{ fontWeight: 700, color: "#0f172a", fontSize: 14 }}>Estimated Monthly Total:</span>
-                    <span style={{ fontWeight: 800, color: "#0284c7", fontSize: 20 }}>
-                      ${((billingInfo?.seat_count || employees.length) * 2).toFixed(2)} USD
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+                    <div
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: 8,
+                        background: "#eff6ff",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <CreditCardIcon size={16} color="#0284c7" />
+                    </div>
+                    <span style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>
+                      Subscription Summary
                     </span>
                   </div>
 
-                  <p style={{ fontSize: 11, color: "#94a3b8", marginTop: 4, lineHeight: 1.4 }}>
-                    * Stripe automatically updates and prorates your monthly subscription whenever employees are added or removed from your organization roster.
-                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "12px 14px",
+                        background: "#f8fafc",
+                        borderRadius: 10,
+                        border: "1px solid #f1f5f9",
+                      }}
+                    >
+                      <span style={{ fontSize: 13, color: "#64748b", fontWeight: 500 }}>Active Employees</span>
+                      <strong style={{ fontSize: 15, color: "#0f172a" }}>
+                        {billingInfo?.seat_count || employees.length} Members
+                      </strong>
+                    </div>
+
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "12px 14px",
+                        background: "#f8fafc",
+                        borderRadius: 10,
+                        border: "1px solid #f1f5f9",
+                      }}
+                    >
+                      <span style={{ fontSize: 13, color: "#64748b", fontWeight: 500 }}>Base Seat Price</span>
+                      <strong style={{ fontSize: 15, color: "#0f172a" }}>$2.00 / member / mo</strong>
+                    </div>
+
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "12px 14px",
+                        background: "#ecfdf5",
+                        borderRadius: 10,
+                        border: "1px solid #a7f3d0",
+                      }}
+                    >
+                      <span style={{ fontSize: 13, color: "#065f46", fontWeight: 500 }}>Due Today (14-Day Trial)</span>
+                      <strong style={{ fontSize: 15, color: "#047857" }}>$0.00 USD</strong>
+                    </div>
+
+                    <div
+                      style={{
+                        borderTop: "2px dashed #e2e8f0",
+                        marginTop: 6,
+                        paddingTop: 16,
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "baseline",
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>Total After 14 Days:</div>
+                        <div style={{ fontSize: 12, color: "#94a3b8" }}>Billed monthly via Stripe</div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <span style={{ fontSize: 28, fontWeight: 800, color: "#4f46e5", letterSpacing: -0.5 }}>
+                          ${((billingInfo?.seat_count || employees.length) * 2).toFixed(2)}
+                        </span>
+                        <span style={{ fontSize: 13, color: "#64748b", fontWeight: 600 }}> /mo</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    marginTop: 24,
+                    paddingTop: 16,
+                    borderTop: "1px solid #f1f5f9",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: 12,
+                    color: "#64748b",
+                  }}
+                >
+                  <LockIcon size={14} color="#10b981" />
+                  <span>Secure 256-bit SSL encrypted checkout powered by Stripe.</span>
                 </div>
               </div>
 
-              {/* What's Included */}
+              {/* What's Included Feature List */}
               <div
                 style={{
                   background: "#ffffff",
                   border: "1px solid #e2e8f0",
-                  borderRadius: 14,
-                  padding: "24px",
-                  boxShadow: "0 1px 3px rgba(0, 0, 0, 0.05)",
+                  borderRadius: 16,
+                  padding: "28px",
+                  boxShadow: "0 1px 4px rgba(0, 0, 0, 0.04)",
                 }}
               >
-                <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 14 }}>
-                  What's Included in Your Plan
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+                  <div
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: 8,
+                      background: "#f0fdf4",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <CheckCircleIcon size={16} color="#16a34a" />
+                  </div>
+                  <span style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>
+                    Included Features
+                  </span>
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#334155" }}>
-                    <CheckCircleIcon size={16} color="#059669" />
-                    <span>512-Dimensional Deep Biometric Face Recognition</span>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                    <div style={{ marginTop: 2 }}>
+                      <CheckCircleIcon size={16} color="#10b981" />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>
+                        Deep Biometric Face Recognition
+                      </div>
+                      <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+                        512D facial landmark verification with anti-spoofing and liveness checks.
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#334155" }}>
-                    <CheckCircleIcon size={16} color="#059669" />
-                    <span>Interactive OpenStreetMap Campus Geofencing</span>
+
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                    <div style={{ marginTop: 2 }}>
+                      <CheckCircleIcon size={16} color="#10b981" />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>
+                        OpenStreetMap Campus Geofencing
+                      </div>
+                      <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+                        Configurable radius validation per office with interactive map picker.
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#334155" }}>
-                    <CheckCircleIcon size={16} color="#059669" />
-                    <span>Automated AWS SES Credentials & Token Dispatch</span>
+
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                    <div style={{ marginTop: 2 }}>
+                      <CheckCircleIcon size={16} color="#10b981" />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>
+                        Multi-Level Leave & Regularization Tiers
+                      </div>
+                      <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+                        Manager review, HR verification, and executive Admin direct bypass.
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#334155" }}>
-                    <CheckCircleIcon size={16} color="#059669" />
-                    <span>Multi-Level Leave Approvals & Missed Punch Regularization</span>
+
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                    <div style={{ marginTop: 2 }}>
+                      <CheckCircleIcon size={16} color="#10b981" />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>
+                        Automated Onboarding & SES Invites
+                      </div>
+                      <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+                        One-click invite links, email credentials, and instant device activation.
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#334155" }}>
-                    <CheckCircleIcon size={16} color="#059669" />
-                    <span>Instant CSV Timesheet Export & Analytics Dashboard</span>
+
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                    <div style={{ marginTop: 2 }}>
+                      <CheckCircleIcon size={16} color="#10b981" />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>
+                        Comprehensive Reports & Timesheet Export
+                      </div>
+                      <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+                        One-click CSV downloads, shift summaries, and attendance audits.
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

@@ -23,6 +23,14 @@ class Tenant(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=get_utc_now)
 
+    # Stripe SaaS Billing & 14-Day Trial ($2/user/month)
+    stripe_customer_id = Column(String(255), nullable=True, index=True)
+    stripe_subscription_id = Column(String(255), nullable=True, index=True)
+    subscription_status = Column(String(50), default="trialing", nullable=False) # trialing, active, past_due, canceled, incomplete
+    trial_ends_at = Column(DateTime(timezone=True), nullable=True)
+    subscription_current_period_end = Column(DateTime(timezone=True), nullable=True)
+    subscription_seat_count = Column(Integer, default=1, nullable=False)
+
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     offices = relationship("Office", back_populates="tenant", cascade="all, delete-orphan")
     attendance_records = relationship("AttendanceRecord", back_populates="tenant")
@@ -50,9 +58,15 @@ class User(Base):
     email = Column(String(255), nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     full_name = Column(String(150), nullable=False)
+    first_name = Column(String(100), nullable=True)
+    last_name = Column(String(100), nullable=True)
+    department = Column(String(100), nullable=True)
+    designation = Column(String(100), nullable=True)
+    phone_number = Column(String(30), nullable=True)
     employee_code = Column(String(50), nullable=False, index=True)
     role = Column(String(20), default="employee", nullable=False) # super_admin, admin, manager, employee
     office_id = Column(UUID(as_uuid=True), ForeignKey("offices.id"), nullable=True)
+    manager_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     default_work_mode = Column(String(20), default="on_site", nullable=False) # on_site, remote
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=get_utc_now)
@@ -65,6 +79,7 @@ class User(Base):
 
     tenant = relationship("Tenant", back_populates="users")
     office = relationship("Office", back_populates="users")
+    manager = relationship("User", remote_side=[id], foreign_keys=[manager_id])
     biometric_profile = relationship("BiometricProfile", back_populates="user", uselist=False)
     devices = relationship("UserDevice", back_populates="user")
     attendance_records = relationship("AttendanceRecord", back_populates="user")
@@ -167,8 +182,33 @@ class Leave(Base):
     start_date = Column(Date, nullable=False)
     end_date = Column(Date, nullable=False)
     reason = Column(Text, nullable=False)
-    status = Column(String(20), default="pending", nullable=False) # pending, approved, rejected
-    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    status = Column(String(30), default="pending_manager", nullable=False) # pending_manager, pending_admin, approved, rejected
+    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True) # legacy/final
+    level1_approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    level1_approved_at = Column(DateTime(timezone=True), nullable=True)
+    level2_approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    level2_approved_at = Column(DateTime(timezone=True), nullable=True)
+    admin_bypassed = Column(Boolean, default=False, nullable=False)
+    rejection_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=get_utc_now)
 
     user = relationship("User", back_populates="leaves", foreign_keys=[user_id])
+
+class AttendanceRequest(Base):
+    __tablename__ = "attendance_requests"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    date = Column(Date, nullable=False)
+    check_in_time = Column(DateTime(timezone=True), nullable=False)
+    check_out_time = Column(DateTime(timezone=True), nullable=True)
+    reason = Column(Text, nullable=False)
+    status = Column(String(20), default="pending", nullable=False) # pending, approved, rejected
+    reviewed_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    reviewer_note = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=get_utc_now)
+
+    user = relationship("User", foreign_keys=[user_id])
+

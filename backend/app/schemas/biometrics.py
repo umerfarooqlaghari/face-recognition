@@ -35,3 +35,17 @@ class BiometricProfileResponse(BaseModel):
     user_id: uuid.UUID
     is_verified: bool
     enrolled_at: datetime
+
+class BiometricBenchmarkResponse(BaseModel):
+    threshold: float
+    total_impostor_trials: int
+    false_accepts: int
+    false_acceptance_rate_percent: float
+    far_target_met: bool
+    total_genuine_trials: int
+    false_rejects: int
+    false_rejection_rate_percent: float
+    frr_target_met: bool
+    genuine_similarity_mean: float
+    impostor_similarity_mean: float
+    status: str

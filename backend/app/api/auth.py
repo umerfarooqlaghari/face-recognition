@@ -84,7 +84,7 @@ async def signup_tenant(req: TenantSignupRequest, db: AsyncSession = Depends(get
         email=req.admin_email.strip().lower(),
         password_hash=hash_password(req.admin_password),
         full_name=req.admin_name.strip(),
-        employee_code="ADM-001",
+        employee_code=f"ADM-{secrets.randbelow(9000) + 1000}",
         role="admin",
         default_work_mode="on_site",
         office_id=office.id,
@@ -129,6 +129,56 @@ async def signup_tenant(req: TenantSignupRequest, db: AsyncSession = Depends(get
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         user=UserResponse.model_validate(admin_user)
     )
+
+@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def register_user(req: UserRegisterRequest, db: AsyncSession = Depends(get_db)):
+    clean_email = req.email.strip().lower()
+
+    # Find or default tenant
+    tenant_res = await db.execute(select(Tenant).order_by(Tenant.created_at.asc()).limit(1))
+    default_tenant = tenant_res.scalar_one_or_none()
+    if not default_tenant:
+        default_tenant = Tenant(name="Primary Organization", slug="primary-org", is_active=True)
+        db.add(default_tenant)
+        await db.flush()
+
+    # Find or default office
+    office_id = req.office_id
+    if not office_id:
+        office_res = await db.execute(select(Office).where(Office.tenant_id == default_tenant.id).limit(1))
+        found_off = office_res.scalar_one_or_none()
+        if not found_off:
+            found_off = Office(
+                tenant_id=default_tenant.id,
+                name="Headquarters",
+                latitude=37.7749,
+                longitude=-122.4194,
+                radius_meters=200
+            )
+            db.add(found_off)
+            await db.flush()
+        office_id = found_off.id
+
+    # Check existing email in tenant
+    existing = await db.execute(select(User).where(User.tenant_id == default_tenant.id, User.email == clean_email))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="User with this email already registered in organization")
+
+    new_user = User(
+        tenant_id=default_tenant.id,
+        email=clean_email,
+        password_hash=hash_password(req.password),
+        full_name=req.full_name.strip(),
+        employee_code=req.employee_code.strip(),
+        role=req.role or "employee",
+        default_work_mode=req.default_work_mode or "on_site",
+        office_id=office_id,
+        is_active=True
+    )
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    return new_user
 
 @router.post("/login", response_model=TokenResponse)
 async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
@@ -191,6 +241,11 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     now_utc = datetime.now(timezone.utc)
 
     if device_record:
+        if not device_record.is_trusted:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This device has been untrusted or revoked. Access denied for security."
+            )
         device_record.device_model = device_info.device_model or device_record.device_model
         device_record.os_name = device_info.os_name or device_record.os_name
         device_record.os_version = device_info.os_version or device_record.os_version
@@ -240,6 +295,12 @@ async def refresh_tokens(req: RefreshTokenRequest, db: AsyncSession = Depends(ge
             detail="Invalid refresh token or device"
         )
 
+    if not device.is_trusted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Device session has been revoked for security reasons."
+        )
+
     now_utc = datetime.now(timezone.utc)
     if device.refresh_token_expires_at < now_utc:
         raise HTTPException(
@@ -279,3 +340,76 @@ async def refresh_tokens(req: RefreshTokenRequest, db: AsyncSession = Depends(ge
 @router.get("/me", response_model=UserResponse)
 async def get_my_profile(current_user: User = Depends(get_current_user)):
     return UserResponse.model_validate(current_user)
+
+@router.get("/devices")
+async def list_user_devices(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """List all registered devices and session statuses for current user."""
+    res = await db.execute(
+        select(UserDevice)
+        .where(UserDevice.user_id == current_user.id)
+        .order_by(UserDevice.last_active_at.desc())
+    )
+    devices = res.scalars().all()
+    return [
+        {
+            "id": str(d.id),
+            "device_id": d.device_id,
+            "device_model": d.device_model,
+            "os_name": d.os_name,
+            "os_version": d.os_version,
+            "app_version": d.app_version,
+            "is_trusted": d.is_trusted,
+            "last_active_at": d.last_active_at.isoformat() if d.last_active_at else None,
+            "created_at": d.created_at.isoformat() if d.created_at else None
+        }
+        for d in devices
+    ]
+
+@router.post("/devices/{device_id}/revoke")
+async def revoke_device_session(
+    device_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Revoke and invalidate session for a specific device."""
+    res = await db.execute(
+        select(UserDevice).where(
+            UserDevice.user_id == current_user.id,
+            UserDevice.device_id == device_id
+        )
+    )
+    device = res.scalar_one_or_none()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    device.is_trusted = False
+    await db.commit()
+    return {"status": "success", "message": f"Device {device_id} session revoked successfully."}
+
+@router.post("/devices/revoke-all-others")
+async def revoke_all_other_devices(
+    current_device_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Revoke all sessions on other devices for security containment."""
+    res = await db.execute(
+        select(UserDevice).where(
+            UserDevice.user_id == current_user.id,
+            UserDevice.device_id != current_device_id
+        )
+    )
+    other_devices = res.scalars().all()
+    for d in other_devices:
+        d.is_trusted = False
+
+    await db.commit()
+    return {
+        "status": "success",
+        "revoked_count": len(other_devices),
+        "message": f"Revoked {len(other_devices)} other active device sessions."
+    }
+

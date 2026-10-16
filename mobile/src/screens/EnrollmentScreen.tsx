@@ -17,6 +17,7 @@ const { width, height } = Dimensions.get('window');
 
 interface EnrollmentScreenProps {
   userId?: string;
+  targetName?: string;
   inviteToken?: string;
   onSuccess: () => void;
   onCancel: () => void;
@@ -24,6 +25,7 @@ interface EnrollmentScreenProps {
 
 export default function EnrollmentScreen({
   userId,
+  targetName,
   inviteToken,
   onSuccess,
   onCancel,
@@ -106,7 +108,9 @@ export default function EnrollmentScreen({
             <CloseIcon size={18} color="#ffffff" />
           </TouchableOpacity>
           <View style={styles.guideBadge}>
-            <Text style={styles.guideBadgeText}>BIOMETRIC ENROLLMENT</Text>
+            <Text style={styles.guideBadgeText}>
+              {targetName ? `ENROLL: ${targetName.toUpperCase()}` : 'BIOMETRIC ENROLLMENT'}
+            </Text>
           </View>
           <TouchableOpacity style={styles.flipBtn} onPress={toggleCameraFacing}>
             <FlipCameraIcon size={20} color="#ffffff" />

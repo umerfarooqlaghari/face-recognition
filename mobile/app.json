@@ -4,8 +4,13 @@
     "slug": "face-attendance",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "icon": "./assets/image.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/image.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#090d16"
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.umerfarooqlaghari.faceattendance",
@@ -20,10 +25,10 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundColor": "#090d16",
+        "foregroundImage": "./assets/image.png",
         "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "monochromeImage": "./assets/image.png"
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.umerfarooqlaghari.faceattendance",
@@ -35,7 +40,7 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/image.png"
     },
     "plugins": [
       "expo-secure-store",
@@ -44,7 +49,7 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/icon.png",
+          "icon": "./assets/image.png",
           "color": "#0284c7"
         }
       ]

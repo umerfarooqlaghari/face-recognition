@@ -14,7 +14,8 @@ from app.schemas.biometrics import (
     InviteResponse,
     VerifyInviteResponse,
     EnrollmentResponse,
-    BiometricProfileResponse
+    BiometricProfileResponse,
+    BiometricBenchmarkResponse
 )
 
 router = APIRouter(prefix="/biometrics", tags=["Biometrics & Invites"])
@@ -186,3 +187,18 @@ async def get_biometric_profile(user_id: uuid.UUID, db: AsyncSession = Depends(g
     if not profile:
         raise HTTPException(status_code=404, detail="No biometric profile found for this employee")
     return profile
+
+@router.get("/benchmarks", response_model=BiometricBenchmarkResponse)
+async def get_biometric_benchmarks(
+    sample_size: int = 15000,
+    threshold: Optional[float] = None
+):
+    """
+    Evaluates Biometric Accuracy Metrics:
+    - False Acceptance Rate (FAR < 0.001%)
+    - False Rejection Rate (FRR < 1.0%)
+    against the 512D ArcFace cosine feature space.
+    """
+    from app.services.biometric_benchmark import run_biometric_benchmarks
+    return run_biometric_benchmarks(sample_size=sample_size, threshold=threshold)
+

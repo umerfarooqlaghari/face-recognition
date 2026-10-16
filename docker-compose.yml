@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: face-recognition-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://face_recognition_user:W0IAkCOFjeFKOzIoNc3yGGwhMYYaBayf@dpg-db6humbrjlhs73ert8vg-a.virginia-postgres.render.com/face_recognition_db_4d90}
+      - SECRET_KEY=${SECRET_KEY:-b93e50669d06b52a420bdf67eb8eb1a9e86c07ea86d946d88ae803b9f91a620b}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-10080}
+      - REFRESH_TOKEN_EXPIRE_DAYS=${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      - GEOFENCE_RADIUS_METERS=${GEOFENCE_RADIUS_METERS:-200}
+      - FACE_SIMILARITY_THRESHOLD=${FACE_SIMILARITY_THRESHOLD:-0.68}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: face-recognition-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      - NODE_ENV=production
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  default:
+    name: face-recognition-network

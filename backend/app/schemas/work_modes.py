@@ -10,6 +10,13 @@ class OfficeCreate(BaseModel):
     radius_meters: int = Field(default=200, ge=10, le=5000)
     address: Optional[str] = None
 
+class OfficeUpdate(BaseModel):
+    name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    radius_meters: Optional[int] = Field(default=None, ge=10, le=5000)
+    address: Optional[str] = None
+
 class OfficeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

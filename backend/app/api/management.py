@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 
 from app.db.session import get_db
-from app.models.models import User, Office, Tenant, FaceScanInvite, AttendanceRecord, BiometricProfile
+from app.models.models import User, Office, Tenant, FaceScanInvite, AttendanceRecord, BiometricProfile, WorkModeOverride
 from app.core.security import hash_password
 from app.api.deps import get_current_user, require_admin
 from app.schemas.auth import UserResponse
@@ -17,10 +17,12 @@ from app.schemas.tenant import (
     OfficeResponse,
     OfficeCreateRequest,
     EmployeeCreateRequest,
+    EmployeeUpdateRequest,
     EmployeeCreateResponse,
     TenantStatsResponse
 )
 from app.services.email_service import send_employee_welcome_email
+from app.services.stripe_service import sync_subscription_seats
 
 router = APIRouter(prefix="/management", tags=["Multi-Tenant Management"])
 
@@ -108,6 +110,21 @@ async def list_employees(
     office_res = await db.execute(select(Office).where(Office.tenant_id == current_admin.tenant_id))
     offices = {o.id: o.name for o in office_res.scalars().all()}
 
+    # Get active/upcoming overrides
+    today = date.today()
+    overrides_res = await db.execute(
+        select(WorkModeOverride).where(
+            WorkModeOverride.tenant_id == current_admin.tenant_id,
+            WorkModeOverride.effective_date >= today
+        )
+    )
+    overrides_map = {
+        ov.user_id: f"{ov.assigned_mode.upper()} on {ov.effective_date}"
+        for ov in overrides_res.scalars().all()
+    }
+
+    managers_map = {emp.id: emp.full_name for emp in employees}
+
     output = []
     for emp in employees:
         output.append({
@@ -115,13 +132,21 @@ async def list_employees(
             "tenant_id": str(emp.tenant_id),
             "email": emp.email,
             "full_name": emp.full_name,
+            "first_name": emp.first_name,
+            "last_name": emp.last_name,
+            "department": emp.department or "General",
+            "designation": emp.designation or "Team Member",
+            "phone_number": emp.phone_number,
             "employee_code": emp.employee_code,
             "role": emp.role,
             "default_work_mode": emp.default_work_mode,
             "office_id": str(emp.office_id) if emp.office_id else None,
-            "office_name": offices.get(emp.office_id, "Unassigned"),
+            "office_name": offices.get(emp.office_id, "Remote / Unassigned") if emp.default_work_mode == "on_site" else "Remote (No Office)",
+            "manager_id": str(emp.manager_id) if emp.manager_id else None,
+            "manager_name": managers_map.get(emp.manager_id, "Direct to Admin") if emp.manager_id else None,
             "is_active": emp.is_active,
             "face_enrolled": emp.id in enrolled_user_ids,
+            "date_override": overrides_map.get(emp.id),
             "created_at": emp.created_at.isoformat() if emp.created_at else None
         })
 
@@ -172,26 +197,50 @@ async def create_employee(
     # Auto-generate secure password
     temp_password = generate_secure_password(12)
 
-    # Resolve office (default to first tenant office if not specified)
+    work_mode = req.default_work_mode or "on_site"
     office_id = req.office_id
-    if not office_id:
-        first_office = await db.execute(
-            select(Office).where(Office.tenant_id == current_admin.tenant_id).limit(1)
-        )
-        found_office = first_office.scalar_one_or_none()
-        if found_office:
-            office_id = found_office.id
+
+    # Single location or Remote enforcement:
+    if work_mode == "remote":
+        office_id = None
+    elif work_mode == "on_site":
+        if not office_id:
+            first_office = await db.execute(
+                select(Office).where(Office.tenant_id == current_admin.tenant_id).limit(1)
+            )
+            found_office = first_office.scalar_one_or_none()
+            if found_office:
+                office_id = found_office.id
+            else:
+                raise HTTPException(status_code=400, detail="Cannot assign on-site mode without an existing office campus. Please create an office location first.")
+
+    # Name resolution
+    first_name = (req.first_name or "").strip()
+    last_name = (req.last_name or "").strip()
+    full_name = (req.full_name or "").strip()
+    if not full_name:
+        full_name = f"{first_name} {last_name}".strip() or clean_email.split("@")[0]
+    if not first_name and full_name:
+        parts = full_name.split(" ", 1)
+        first_name = parts[0]
+        last_name = parts[1] if len(parts) > 1 else ""
 
     # Create User
     new_user = User(
         tenant_id=current_admin.tenant_id,
         email=clean_email,
         password_hash=hash_password(temp_password),
-        full_name=req.full_name.strip(),
+        full_name=full_name,
+        first_name=first_name,
+        last_name=last_name,
+        department=req.department.strip() if req.department else "General",
+        designation=req.designation.strip() if req.designation else "Team Member",
+        phone_number=req.phone_number.strip() if req.phone_number else None,
         employee_code=emp_code,
         role=req.role or "employee",
-        default_work_mode=req.default_work_mode or "on_site",
+        default_work_mode=work_mode,
         office_id=office_id,
+        manager_id=req.manager_id,
         is_active=True
     )
     db.add(new_user)
@@ -212,10 +261,16 @@ async def create_employee(
     await db.commit()
     await db.refresh(new_user)
 
-    # Get Tenant Name
+    # Get Tenant Name & Sync Subscription Seats
     tenant_res = await db.execute(select(Tenant).where(Tenant.id == current_admin.tenant_id))
     tenant = tenant_res.scalar_one_or_none()
     company_name = tenant.name if tenant else "Attendance Platform"
+
+    if tenant and tenant.stripe_subscription_id:
+        try:
+            await sync_subscription_seats(tenant, db)
+        except Exception:
+            pass
 
     # Dispatch Welcome Email via AWS SES
     email_dispatch = await send_employee_welcome_email(
@@ -355,3 +410,110 @@ async def get_tenant_today_attendance(
             "snapshot_url": att.snapshot_url
         })
     return output
+
+@router.delete("/employees/{employee_id}")
+async def delete_employee(
+    employee_id: uuid.UUID,
+    current_admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete an employee and cascade their records within this tenant."""
+    if employee_id == current_admin.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own administrator account")
+    res = await db.execute(
+        select(User).where(User.id == employee_id, User.tenant_id == current_admin.tenant_id)
+    )
+    emp = res.scalar_one_or_none()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    await db.delete(emp)
+    await db.commit()
+
+    # Sync seats with Stripe subscription
+    tenant_res = await db.execute(select(Tenant).where(Tenant.id == current_admin.tenant_id))
+    tenant = tenant_res.scalar_one_or_none()
+    if tenant and tenant.stripe_subscription_id:
+        try:
+            await sync_subscription_seats(tenant, db)
+        except Exception:
+            pass
+
+    return {"status": "success", "message": f"Employee {emp.full_name} deleted successfully"}
+
+@router.put("/employees/{employee_id}")
+async def update_employee(
+    employee_id: uuid.UUID,
+    req: EmployeeUpdateRequest,
+    current_admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update employee metadata such as assigned manager, office, work mode, and role."""
+    res = await db.execute(
+        select(User).where(User.id == employee_id, User.tenant_id == current_admin.tenant_id)
+    )
+    emp = res.scalar_one_or_none()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    if req.first_name is not None:
+        emp.first_name = req.first_name.strip()
+    if req.last_name is not None:
+        emp.last_name = req.last_name.strip()
+    if req.department is not None:
+        emp.department = req.department.strip()
+    if req.designation is not None:
+        emp.designation = req.designation.strip()
+    if req.phone_number is not None:
+        emp.phone_number = req.phone_number.strip()
+    if req.full_name is not None:
+        emp.full_name = req.full_name.strip()
+    elif req.first_name is not None or req.last_name is not None:
+        emp.full_name = f"{emp.first_name or ''} {emp.last_name or ''}".strip()
+
+    # Self-demotion protection: prevent super_admin from accidentally demoting themselves to employee
+    if req.role is not None:
+        if emp.id == current_admin.id and emp.role == "super_admin" and req.role != "super_admin":
+            # preserve super_admin role
+            pass
+        else:
+            emp.role = req.role
+
+    if req.default_work_mode is not None:
+        emp.default_work_mode = req.default_work_mode
+        if emp.default_work_mode == "remote":
+            emp.office_id = None
+
+    if "office_id" in req.model_fields_set:
+        if emp.default_work_mode == "remote":
+            emp.office_id = None
+        else:
+            emp.office_id = req.office_id
+
+    if "manager_id" in req.model_fields_set:
+        if req.manager_id == emp.id:
+            raise HTTPException(status_code=400, detail="An employee cannot be their own manager")
+        emp.manager_id = req.manager_id
+    if req.is_active is not None:
+        emp.is_active = req.is_active
+
+    await db.commit()
+    await db.refresh(emp)
+    return {
+        "status": "success",
+        "message": f"Employee {emp.full_name} updated successfully",
+        "user": {
+            "id": str(emp.id),
+            "full_name": emp.full_name,
+            "first_name": emp.first_name,
+            "last_name": emp.last_name,
+            "department": emp.department,
+            "designation": emp.designation,
+            "phone_number": emp.phone_number,
+            "role": emp.role,
+            "office_id": str(emp.office_id) if emp.office_id else None,
+            "manager_id": str(emp.manager_id) if emp.manager_id else None,
+            "default_work_mode": emp.default_work_mode
+        }
+    }
+
+

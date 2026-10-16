@@ -47,4 +47,10 @@ class Settings(BaseSettings):
     AWS_SES_FROM_EMAIL: str = "noreply@attendapp.com"
     FRONTEND_URL: str = "http://localhost:3000"
 
+    # Stripe SaaS Billing & Webhook ($2/employee/month + 14-day trial)
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_PUBLISHABLE_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_PRICE_ID: str = ""
+
 settings = Settings()

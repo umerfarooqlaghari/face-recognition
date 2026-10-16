@@ -23,6 +23,11 @@ class UserRegisterRequest(BaseModel):
     email: EmailStr
     password: str
     full_name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    department: Optional[str] = None
+    designation: Optional[str] = None
+    phone_number: Optional[str] = None
     employee_code: str
     role: Optional[str] = "employee"
     default_work_mode: Optional[str] = "on_site"
@@ -35,10 +40,16 @@ class UserResponse(BaseModel):
     tenant_id: uuid.UUID
     email: str
     full_name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    department: Optional[str] = None
+    designation: Optional[str] = None
+    phone_number: Optional[str] = None
     employee_code: str
     role: str
     default_work_mode: str
     office_id: Optional[uuid.UUID] = None
+    manager_id: Optional[uuid.UUID] = None
     is_active: bool
 
 class TokenResponse(BaseModel):

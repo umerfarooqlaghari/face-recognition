@@ -369,6 +369,9 @@ export async function getTodayAttendance(userId: string): Promise<{
     similarity_score: number;
     distance_from_office_meters?: number | null;
   } | null;
+  is_on_leave?: boolean;
+  leave_status?: string | null;
+  leave_reason?: string | null;
 }> {
   const res = await authFetch(`/attendance/today/${userId}`);
   if (!res.ok) {
@@ -391,3 +394,275 @@ export async function getAttendanceHistory(userId: string): Promise<Array<{
   if (!res.ok) return [];
   return res.json();
 }
+
+// ---------------- Leave Management API ----------------
+
+export interface LeaveItem {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  employee_name?: string | null;
+  employee_code?: string | null;
+  manager_name?: string | null;
+  start_date: string;
+  end_date: string;
+  reason: string;
+  status: 'pending_manager' | 'pending_admin' | 'pending' | 'approved' | 'rejected';
+  approved_by?: string | null;
+  level1_approved_by?: string | null;
+  level1_approver_name?: string | null;
+  level1_approved_at?: string | null;
+  level2_approved_by?: string | null;
+  level2_approver_name?: string | null;
+  level2_approved_at?: string | null;
+  admin_bypassed?: boolean;
+  rejection_reason?: string | null;
+  created_at: string;
+}
+
+export async function applyLeave(payload: {
+  startDate: string;
+  endDate: string;
+  reason: string;
+}): Promise<LeaveItem> {
+  const res = await authFetch('/leaves/apply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      start_date: payload.startDate,
+      end_date: payload.endDate,
+      reason: payload.reason,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to submit leave request');
+  }
+
+  return res.json();
+}
+
+export async function getMyLeaves(): Promise<LeaveItem[]> {
+  const res = await authFetch('/leaves/my-leaves');
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function getTenantLeaves(status?: string): Promise<LeaveItem[]> {
+  const query = status ? `?status=${status}` : '';
+  const res = await authFetch(`/leaves/tenant-leaves${query}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function reviewLeave(
+  leaveId: string,
+  status: 'approved' | 'rejected' | 'bypass',
+  reviewNote?: string,
+  bypass?: boolean
+): Promise<LeaveItem> {
+  const res = await authFetch(`/leaves/${leaveId}/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      status,
+      review_note: reviewNote,
+      bypass: bypass || status === 'bypass',
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to review leave');
+  }
+
+  return res.json();
+}
+
+export interface OfficeItem {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius_meters: number;
+  address?: string | null;
+}
+
+export async function getTenantOffices(): Promise<OfficeItem[]> {
+  const res = await authFetch('/work-modes/offices');
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function createTenantOffice(payload: {
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius_meters?: number;
+  address?: string;
+}): Promise<OfficeItem> {
+  const res = await authFetch('/work-modes/offices', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to create office location');
+  }
+  return res.json();
+}
+
+export async function deleteTenantOffice(officeId: string): Promise<any> {
+  const res = await authFetch(`/work-modes/offices/${officeId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to delete office location');
+  }
+  return res.json();
+}
+
+// ---------------- Management Portal API ----------------
+
+export async function getManagementEmployees(): Promise<Array<{
+  id: string;
+  tenant_id: string;
+  email: string;
+  full_name: string;
+  employee_code: string;
+  role: string;
+  default_work_mode: 'on_site' | 'remote';
+  office_id?: string | null;
+  office_name?: string;
+  manager_id?: string | null;
+  manager_name?: string | null;
+  is_active: boolean;
+  face_enrolled: boolean;
+  date_override?: string | null;
+  created_at: string;
+}>> {
+  const res = await authFetch('/management/employees');
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function getManagementTenantStats(): Promise<any> {
+  const res = await authFetch('/management/tenant');
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export async function getManagementTodayAttendance(): Promise<any[]> {
+  const res = await authFetch('/management/attendance/today');
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function resendEmployeeInvite(employeeId: string): Promise<any> {
+  const res = await authFetch(`/management/employees/${employeeId}/resend-invite`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to resend invite');
+  }
+  return res.json();
+}
+
+export async function createManagementEmployee(payload: {
+  fullName?: string;
+  firstName?: string;
+  lastName?: string;
+  department?: string;
+  designation?: string;
+  phoneNumber?: string;
+  email: string;
+  employeeCode?: string;
+  defaultWorkMode: 'on_site' | 'remote';
+  role?: string;
+  officeId?: string;
+  managerId?: string;
+}): Promise<{
+  user: User;
+  auto_generated_password: string;
+  invite_token: string;
+  email_dispatch: any;
+}> {
+  const res = await authFetch('/management/employees', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      full_name: payload.fullName,
+      first_name: payload.firstName,
+      last_name: payload.lastName,
+      department: payload.department,
+      designation: payload.designation,
+      phone_number: payload.phoneNumber,
+      email: payload.email,
+      employee_code: payload.employeeCode || undefined,
+      default_work_mode: payload.defaultWorkMode,
+      role: payload.role || 'employee',
+      office_id: payload.officeId || undefined,
+      manager_id: payload.managerId || undefined,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to enroll employee');
+  }
+  return res.json();
+}
+
+export async function updateManagementEmployee(
+  employeeId: string,
+  payload: {
+    fullName?: string;
+    firstName?: string;
+    lastName?: string;
+    department?: string;
+    designation?: string;
+    phoneNumber?: string;
+    role?: string;
+    defaultWorkMode?: 'on_site' | 'remote';
+    officeId?: string | null;
+    managerId?: string | null;
+  }
+): Promise<any> {
+  const res = await authFetch(`/management/employees/${employeeId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      full_name: payload.fullName,
+      first_name: payload.firstName,
+      last_name: payload.lastName,
+      department: payload.department,
+      designation: payload.designation,
+      phone_number: payload.phoneNumber,
+      role: payload.role,
+      default_work_mode: payload.defaultWorkMode,
+      office_id: payload.officeId,
+      manager_id: payload.managerId,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to update employee');
+  }
+  return res.json();
+}
+
+export async function deleteManagementEmployee(employeeId: string): Promise<any> {
+  const res = await authFetch(`/management/employees/${employeeId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to delete employee');
+  }
+  return res.json();
+}
+
+

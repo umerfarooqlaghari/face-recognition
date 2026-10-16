@@ -7,6 +7,8 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
+  TextInput,
+  Image,
 } from 'react-native';
 import { User } from '../types';
 import { getCurrentGPSLocation, LocationCoordinates } from '../services/location';
@@ -16,9 +18,13 @@ import {
   getTodayAttendance,
   getAttendanceHistory,
   markAttendanceCheckOut,
+  applyLeave,
+  getMyLeaves,
+  LeaveItem,
 } from '../services/api';
 import {
   UserIcon,
+  ShieldIcon,
   CameraIcon,
   RefreshIcon,
   GlobeIcon,
@@ -60,6 +66,18 @@ export default function EmployeePortal({
   const [todayAttendance, setTodayAttendance] = useState<any | null>(null);
   const [history, setHistory] = useState<any[]>([]);
 
+  // Leave Management State
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = tomorrow.toISOString().split('T')[0];
+
+  const [leavesList, setLeavesList] = useState<LeaveItem[]>([]);
+  const [showLeaveForm, setShowLeaveForm] = useState(false);
+  const [leaveStartDate, setLeaveStartDate] = useState(tomorrowStr);
+  const [leaveEndDate, setLeaveEndDate] = useState(tomorrowStr);
+  const [leaveReason, setLeaveReason] = useState('');
+  const [leaveSubmitting, setLeaveSubmitting] = useState(false);
+
   useEffect(() => {
     loadWorkModeAndLocation();
     loadAttendanceData();
@@ -67,14 +85,43 @@ export default function EmployeePortal({
 
   const loadAttendanceData = async () => {
     try {
-      const [todayData, histData] = await Promise.all([
+      const [todayData, histData, myLeaves] = await Promise.all([
         getTodayAttendance(user.id),
         getAttendanceHistory(user.id),
+        getMyLeaves(),
       ]);
       setTodayAttendance(todayData);
       setHistory(histData);
+      setLeavesList(myLeaves);
     } catch {
       // Ignored if offline
+    }
+  };
+
+  const handleApplyLeave = async () => {
+    if (!leaveReason.trim()) {
+      Alert.alert('Reason Required', 'Please enter a reason for the leave request.');
+      return;
+    }
+    try {
+      setLeaveSubmitting(true);
+      await applyLeave({
+        startDate: leaveStartDate,
+        endDate: leaveEndDate,
+        reason: leaveReason.trim(),
+      });
+      Alert.alert(
+        'Leave Request Submitted',
+        `Your request from ${leaveStartDate} to ${leaveEndDate} has been submitted for management approval.`
+      );
+      setLeaveReason('');
+      setShowLeaveForm(false);
+      const updated = await getMyLeaves();
+      setLeavesList(updated);
+    } catch (err: any) {
+      Alert.alert('Submission Error', err.message || 'Could not submit leave request');
+    } finally {
+      setLeaveSubmitting(false);
     }
   };
 
@@ -144,26 +191,33 @@ export default function EmployeePortal({
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {/* Header Bar */}
+      {/* Sleek Single-Line Header */}
       <View style={styles.topBar}>
-        <View>
-          <Text style={styles.greeting}>Welcome back,</Text>
-          <Text style={styles.userName}>{user.full_name}</Text>
-          <Text style={styles.userCode}>CODE: {user.employee_code}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, marginRight: 8 }}>
+          <Image
+            source={require('../../assets/image.png')}
+            style={styles.portalLogo}
+            resizeMode="contain"
+          />
+          <View style={{ flexShrink: 1 }}>
+            <Text style={styles.userName} numberOfLines={1}>{user.full_name}</Text>
+            <Text style={styles.userCode}>CODE: {user.employee_code}</Text>
+          </View>
         </View>
-        <TouchableOpacity style={styles.logoutBtn} onPress={onLogout}>
-          <LogOutIcon size={14} color="#64748b" />
-          <Text style={styles.logoutText}>Sign Out</Text>
-        </TouchableOpacity>
-      </View>
 
-      {/* Switch to Management if authorized */}
-      {user.role !== 'employee' && onSwitchPortal && (
-        <TouchableOpacity style={styles.switchButton} onPress={onSwitchPortal}>
-          <Text style={styles.switchButtonText}>Management Dashboard</Text>
-          <ChevronRightIcon size={14} color="#1e3a8a" />
-        </TouchableOpacity>
-      )}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          {user.role !== 'employee' && onSwitchPortal && (
+            <TouchableOpacity style={styles.switchButton} onPress={onSwitchPortal}>
+              <ShieldIcon size={12} color="#1e3a8a" />
+              <Text style={styles.switchButtonText}>Admin</Text>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity style={styles.logoutBtn} onPress={onLogout} accessibilityLabel="Sign Out">
+            <LogOutIcon size={13} color="#64748b" />
+          </TouchableOpacity>
+        </View>
+      </View>
 
       {/* Work Mode Card */}
       <View style={styles.card}>
@@ -252,7 +306,20 @@ export default function EmployeePortal({
       <View style={styles.card}>
         <Text style={styles.cardSectionTitle}>TODAY'S VERIFICATION STATUS</Text>
 
-        {todayAttendance?.checked_in ? (
+        {todayAttendance?.is_on_leave && !todayAttendance?.has_checked_in && !todayAttendance?.checked_in ? (
+          <View style={styles.leaveExemptBox}>
+            <View style={styles.inlineRow}>
+              <CheckIcon size={18} color="#059669" />
+              <Text style={styles.leaveExemptTitle}>Approved Leave Active Today</Text>
+            </View>
+            <Text style={styles.leaveExemptSubtitle}>
+              Reason: "{todayAttendance.leave_reason || 'Personal time off'}". You are officially exempt from attendance check-in today.
+            </Text>
+            <TouchableOpacity style={styles.optionalScanBtn} onPress={handleFaceScanTrigger}>
+              <Text style={styles.optionalScanBtnText}>Punch In Voluntarily</Text>
+            </TouchableOpacity>
+          </View>
+        ) : todayAttendance?.has_checked_in || todayAttendance?.checked_in ? (
           <View style={styles.checkedInBox}>
             <View style={styles.checkedInRow}>
               <View style={styles.inlineRow}>
@@ -264,7 +331,7 @@ export default function EmployeePortal({
               </Text>
             </View>
 
-            {!todayAttendance?.checked_out ? (
+            {!todayAttendance?.checked_out && !todayAttendance?.has_checked_out ? (
               <TouchableOpacity style={styles.checkoutButton} onPress={handleCheckOut}>
                 <Text style={styles.checkoutButtonText}>Check Out for the Day</Text>
               </TouchableOpacity>
@@ -291,6 +358,105 @@ export default function EmployeePortal({
                 : 'Scan Face to Check In'}
             </Text>
           </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Time Off & Leave Requests */}
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <Text style={styles.cardSectionTitle}>TIME OFF & LEAVES</Text>
+          <TouchableOpacity
+            style={styles.requestLeaveToggle}
+            onPress={() => setShowLeaveForm(!showLeaveForm)}
+          >
+            <Text style={styles.requestLeaveToggleText}>
+              {showLeaveForm ? 'Close Form' : '+ Request Leave'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {showLeaveForm && (
+          <View style={styles.leaveForm}>
+            <Text style={styles.formLabel}>Start Date (YYYY-MM-DD)</Text>
+            <TextInput
+              style={styles.input}
+              value={leaveStartDate}
+              onChangeText={setLeaveStartDate}
+              placeholder="2026-10-15"
+              placeholderTextColor="#94a3b8"
+            />
+
+            <Text style={styles.formLabel}>End Date (YYYY-MM-DD)</Text>
+            <TextInput
+              style={styles.input}
+              value={leaveEndDate}
+              onChangeText={setLeaveEndDate}
+              placeholder="2026-10-16"
+              placeholderTextColor="#94a3b8"
+            />
+
+            <Text style={styles.formLabel}>Reason for Leave</Text>
+            <TextInput
+              style={[styles.input, { height: 60, textAlignVertical: 'top' }]}
+              value={leaveReason}
+              onChangeText={setLeaveReason}
+              placeholder="Medical appointment, family event, personal day..."
+              placeholderTextColor="#94a3b8"
+              multiline
+            />
+
+            <TouchableOpacity
+              style={styles.submitLeaveBtn}
+              onPress={handleApplyLeave}
+              disabled={leaveSubmitting}
+            >
+              {leaveSubmitting ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <Text style={styles.submitLeaveBtnText}>Submit Leave Request</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {leavesList.length === 0 ? (
+          <Text style={styles.emptyText}>No submitted leave requests yet.</Text>
+        ) : (
+          leavesList.slice(0, 5).map(lv => (
+            <View key={lv.id} style={styles.leaveHistoryRow}>
+              <View style={{ flex: 1, marginRight: 8 }}>
+                <Text style={styles.leaveDateRange}>
+                  {lv.start_date} to {lv.end_date}
+                </Text>
+                <Text style={styles.leaveReasonText} numberOfLines={1}>
+                  {lv.reason}
+                </Text>
+              </View>
+              <View
+                style={[
+                  styles.leaveStatusPill,
+                  lv.status === 'approved'
+                    ? styles.pillApproved
+                    : lv.status === 'rejected'
+                    ? styles.pillRejected
+                    : styles.pillPending,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.leaveStatusPillText,
+                    lv.status === 'approved'
+                      ? styles.pillApprovedText
+                      : lv.status === 'rejected'
+                      ? styles.pillRejectedText
+                      : styles.pillPendingText,
+                  ]}
+                >
+                  {lv.status.toUpperCase()}
+                </Text>
+              </View>
+            </View>
+          ))
         )}
       </View>
 
@@ -350,57 +516,65 @@ const styles = StyleSheet.create({
   topBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 20,
+    alignItems: 'center',
+    marginBottom: 16,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  portalLogo: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
   },
   greeting: {
-    fontSize: 13,
+    fontSize: 11,
     color: '#64748b',
     fontWeight: '600',
   },
   userName: {
-    fontSize: 22,
-    fontWeight: '800',
+    fontSize: 14,
+    fontWeight: '700',
     color: '#0f172a',
-    letterSpacing: -0.5,
+    letterSpacing: -0.3,
   },
   userCode: {
-    fontSize: 11,
+    fontSize: 9,
     color: '#1e3a8a',
     fontWeight: '700',
     fontFamily: 'monospace',
-    marginTop: 2,
   },
   logoutBtn: {
-    flexDirection: 'row',
+    width: 32,
+    height: 32,
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#ffffff',
+    justifyContent: 'center',
+    backgroundColor: '#f8fafc',
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
     borderRadius: 8,
   },
   logoutText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
     color: '#475569',
   },
   switchButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: 4,
     backgroundColor: '#eff6ff',
     borderWidth: 1,
     borderColor: '#bfdbfe',
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginBottom: 16,
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
   },
   switchButtonText: {
-    fontSize: 13,
+    fontSize: 11,
     fontWeight: '700',
     color: '#1e3a8a',
   },
@@ -676,5 +850,143 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#0f172a',
+  },
+  leaveExemptBox: {
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+    borderRadius: 12,
+    padding: 14,
+  },
+  leaveExemptTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#065f46',
+  },
+  leaveExemptSubtitle: {
+    fontSize: 12,
+    color: '#047857',
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  optionalScanBtn: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#6ee7b7',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  optionalScanBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#065f46',
+  },
+  requestLeaveToggle: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  requestLeaveToggleText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1e3a8a',
+  },
+  leaveForm: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+  formLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+    marginBottom: 4,
+    marginTop: 6,
+  },
+  input: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 13,
+    color: '#0f172a',
+  },
+  submitLeaveBtn: {
+    backgroundColor: '#1e3a8a',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  submitLeaveBtnText: {
+    color: '#ffffff',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  leaveHistoryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  leaveDateRange: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  leaveReasonText: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  leaveStatusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  pillApproved: {
+    backgroundColor: '#ecfdf5',
+    borderColor: '#a7f3d0',
+  },
+  pillApprovedText: {
+    color: '#059669',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  pillRejected: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+  },
+  pillRejectedText: {
+    color: '#dc2626',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  pillPending: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fde68a',
+  },
+  pillPendingText: {
+    color: '#d97706',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  leaveStatusPillText: {
+    fontSize: 10,
+    fontWeight: '800',
   },
 });

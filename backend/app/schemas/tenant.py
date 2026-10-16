@@ -44,12 +44,31 @@ class OfficeResponse(BaseModel):
     address: Optional[str] = None
 
 class EmployeeCreateRequest(BaseModel):
-    full_name: str
+    full_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    department: Optional[str] = None
+    designation: Optional[str] = None
+    phone_number: Optional[str] = None
     email: EmailStr
     employee_code: Optional[str] = None
     default_work_mode: Optional[str] = "on_site" # on_site, remote
     office_id: Optional[uuid.UUID] = None
+    manager_id: Optional[uuid.UUID] = None
     role: Optional[str] = "employee"
+
+class EmployeeUpdateRequest(BaseModel):
+    full_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    department: Optional[str] = None
+    designation: Optional[str] = None
+    phone_number: Optional[str] = None
+    role: Optional[str] = None
+    default_work_mode: Optional[str] = None
+    office_id: Optional[uuid.UUID] = None
+    manager_id: Optional[uuid.UUID] = None
+    is_active: Optional[bool] = None
 
 class EmployeeCreateResponse(BaseModel):
     user: UserResponse

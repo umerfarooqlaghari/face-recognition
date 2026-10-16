@@ -172,7 +172,7 @@ export default function AttendanceCameraScreen({
 
           <Text style={styles.instructionText}>
             {verifyResult
-              ? `Match: ${(verifyResult.similarity_score * 100).toFixed(1)}% • ${verifyResult.status.toUpperCase()}`
+              ? `Match: ${(verifyResult.similarity_score * 100).toFixed(1)}% - ${verifyResult.status.toUpperCase()}`
               : isVerifying
               ? 'Analyzing facial biometrics with pgvector...'
               : 'Position face in frame & press punch'}

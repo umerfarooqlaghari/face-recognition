@@ -136,4 +136,51 @@ export const FingerprintIcon: React.FC<IconProps> = ({ size = 24, color = '#0f17
     <Path d="M12 7c2.8 0 5 2.2 5 5 0 2.5-.5 5-2 7" />
     <Path d="M12 11c.6 0 1 .4 1 1 0 1.5-.5 3-1.5 4" />
   </Svg>
+);export const PlusIcon: React.FC<IconProps> = ({ size = 18, color = '#ffffff' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <Line x1="12" y1="5" x2="12" y2="19" />
+    <Line x1="5" y1="12" x2="19" y2="12" />
+  </Svg>
 );
+
+export const UserPlusIcon: React.FC<IconProps> = ({ size = 18, color = '#ffffff' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+    <Circle cx="8.5" cy="7" r="4" />
+    <Line x1="20" y1="8" x2="20" y2="14" />
+    <Line x1="23" y1="11" x2="17" y2="11" />
+  </Svg>
+);
+
+export const CopyIcon: React.FC<IconProps> = ({ size = 16, color = '#64748b' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+    <Path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </Svg>
+);
+
+export const TrashIcon: React.FC<IconProps> = ({ size = 16, color = '#dc2626' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Polyline points="3 6 5 6 21 6" />
+    <Path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    <Line x1="10" y1="11" x2="10" y2="17" />
+    <Line x1="14" y1="11" x2="14" y2="17" />
+  </Svg>
+);
+
+export const PencilIcon: React.FC<IconProps> = ({ size = 16, color = '#38bdf8' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+  </Svg>
+);
+
+export const GpsIcon: React.FC<IconProps> = ({ size = 16, color = '#38bdf8' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Circle cx="12" cy="12" r="7" />
+    <Line x1="12" y1="1" x2="12" y2="5" />
+    <Line x1="12" y1="19" x2="12" y2="23" />
+    <Line x1="1" y1="12" x2="5" y2="12" />
+    <Line x1="19" y1="12" x2="23" y2="12" />
+  </Svg>
+);
+

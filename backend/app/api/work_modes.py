@@ -11,6 +11,7 @@ from app.services.geo_engine import calculate_haversine_distance, is_within_geof
 from app.services.work_mode_service import resolve_effective_work_mode
 from app.schemas.work_modes import (
     OfficeCreate,
+    OfficeUpdate,
     OfficeResponse,
     WorkModeOverrideCreate,
     WorkModeOverrideResponse,
@@ -50,8 +51,64 @@ async def list_offices(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    res = await db.execute(select(Office).where(Office.tenant_id == current_user.tenant_id))
+    res = await db.execute(
+        select(Office)
+        .where(Office.tenant_id == current_user.tenant_id)
+        .order_by(Office.name.asc())
+    )
     return res.scalars().all()
+
+@router.put("/offices/{office_id}", response_model=OfficeResponse)
+async def update_office(
+    office_id: uuid.UUID,
+    req: OfficeUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if current_user.role not in ["manager", "super_admin", "admin"]:
+        raise HTTPException(status_code=403, detail="Only managers or administrators can edit offices")
+
+    res = await db.execute(
+        select(Office).where(Office.id == office_id, Office.tenant_id == current_user.tenant_id)
+    )
+    off = res.scalar_one_or_none()
+    if not off:
+        raise HTTPException(status_code=404, detail="Office location not found")
+
+    if req.name is not None:
+        off.name = req.name.strip()
+    if req.latitude is not None:
+        off.latitude = req.latitude
+    if req.longitude is not None:
+        off.longitude = req.longitude
+    if req.radius_meters is not None:
+        off.radius_meters = req.radius_meters
+    if req.address is not None:
+        off.address = req.address.strip()
+
+    await db.commit()
+    await db.refresh(off)
+    return off
+
+@router.delete("/offices/{office_id}")
+async def delete_office(
+    office_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if current_user.role not in ["manager", "super_admin", "admin"]:
+        raise HTTPException(status_code=403, detail="Only managers or administrators can delete offices")
+
+    res = await db.execute(
+        select(Office).where(Office.id == office_id, Office.tenant_id == current_user.tenant_id)
+    )
+    off = res.scalar_one_or_none()
+    if not off:
+        raise HTTPException(status_code=404, detail="Office location not found")
+
+    await db.delete(off)
+    await db.commit()
+    return {"status": "success", "message": f"Office location {off.name} removed successfully"}
 
 # --- Work Mode Overrides ---
 
@@ -160,19 +217,56 @@ async def validate_employee_geofence(
 
     # On-site mode: Check office assignment
     if not office:
-        # Default fallback to HQ if employee has no office attached
-        off_res = await db.execute(select(Office).limit(1))
-        office = off_res.scalar_one_or_none()
+        # Check all tenant offices
+        u_res = await db.execute(select(User).where(User.id == req.user_id))
+        target_u = u_res.scalar_one_or_none()
+        tenant_id = target_u.tenant_id if target_u else None
 
-    if not office:
-        # If no office exists in database, permit for dev but warn
+        all_offices = []
+        if tenant_id:
+            off_res = await db.execute(select(Office).where(Office.tenant_id == tenant_id))
+            all_offices = off_res.scalars().all()
+
+        if not all_offices:
+            off_res = await db.execute(select(Office).limit(1))
+            fallback_off = off_res.scalar_one_or_none()
+            if fallback_off:
+                all_offices = [fallback_off]
+
+        if not all_offices:
+            return GeofenceValidateResponse(
+                allowed=True,
+                work_mode="on_site",
+                distance_meters=0.0,
+                radius_limit_meters=200,
+                is_within_geofence=True,
+                message="No office configured; permitted by default."
+            )
+
+        min_distance = float('inf')
+        closest_off = all_offices[0]
+        for off in all_offices:
+            within, dist = is_within_geofence(req.latitude, req.longitude, off.latitude, off.longitude, off.radius_meters)
+            if within:
+                return GeofenceValidateResponse(
+                    allowed=True,
+                    work_mode="on_site",
+                    distance_meters=dist,
+                    radius_limit_meters=off.radius_meters,
+                    is_within_geofence=True,
+                    message=f"Within geofence of {off.name}! ({dist:.1f}m away)"
+                )
+            if dist < min_distance:
+                min_distance = dist
+                closest_off = off
+
         return GeofenceValidateResponse(
-            allowed=True,
+            allowed=False,
             work_mode="on_site",
-            distance_meters=0.0,
-            radius_limit_meters=200,
-            is_within_geofence=True,
-            message="No office configured; permitted by default."
+            distance_meters=min_distance,
+            radius_limit_meters=closest_off.radius_meters,
+            is_within_geofence=False,
+            message=f"Out of office bounds. You are {min_distance:.1f}m away from closest location {closest_off.name} (Limit: {closest_off.radius_meters}m)."
         )
 
     within_bounds, distance = is_within_geofence(

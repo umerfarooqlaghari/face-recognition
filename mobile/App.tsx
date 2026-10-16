@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, ActivityIndicator, StyleSheet, SafeAreaView, StatusBar, Alert } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, SafeAreaView, StatusBar, Alert, Image } from 'react-native';
 import { User, AuthTokens } from './src/types';
 import { getStoredUser, clearSession } from './src/services/api';
 import LoginScreen from './src/screens/LoginScreen';
@@ -15,6 +15,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [activePortal, setActivePortal] = useState<'employee' | 'management'>('employee');
   const [isEnrolling, setIsEnrolling] = useState(false);
+  const [enrollingTarget, setEnrollingTarget] = useState<{ id: string; name: string } | null>(null);
   const [isScanningAttendance, setIsScanningAttendance] = useState(false);
   const [scanIsRemote, setScanIsRemote] = useState(false);
   const [attendanceKey, setAttendanceKey] = useState(0);
@@ -26,7 +27,7 @@ export default function App() {
         const stored = await getStoredUser();
         if (stored) {
           setUser(stored);
-          setActivePortal(stored.role === 'manager' || stored.role === 'super_admin' ? 'management' : 'employee');
+          setActivePortal(stored.role === 'admin' || stored.role === 'manager' || stored.role === 'super_admin' ? 'management' : 'employee');
         }
       } finally {
         setLoading(false);
@@ -36,7 +37,7 @@ export default function App() {
 
   const handleLoginSuccess = (tokens: AuthTokens) => {
     setUser(tokens.user);
-    setActivePortal(tokens.user.role === 'manager' || tokens.user.role === 'super_admin' ? 'management' : 'employee');
+    setActivePortal(tokens.user.role === 'admin' || tokens.user.role === 'manager' || tokens.user.role === 'super_admin' ? 'management' : 'employee');
   };
 
   const handleLogout = async () => {
@@ -48,20 +49,38 @@ export default function App() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#38bdf8" />
+        <Image
+          source={require('./assets/image.png')}
+          style={styles.splashLogo}
+          resizeMode="contain"
+        />
+        <ActivityIndicator size="small" color="#38bdf8" style={{ marginTop: 24 }} />
       </View>
     );
   }
 
   if (isEnrolling && user) {
+    const targetUserId = enrollingTarget ? enrollingTarget.id : user.id;
+    const targetName = enrollingTarget ? enrollingTarget.name : user.full_name;
     return (
       <EnrollmentScreen
-        userId={user.id}
+        userId={targetUserId}
+        targetName={targetName}
         onSuccess={() => {
           setIsEnrolling(false);
-          Alert.alert('Success', 'Biometric profile registered with 512D ArcFace vector embedding!');
+          const enrolledName = enrollingTarget?.name;
+          setEnrollingTarget(null);
+          Alert.alert(
+            'Enrollment Complete',
+            enrolledName
+              ? `Biometric profile for ${enrolledName} registered with 512D ArcFace vector embedding!`
+              : 'Your biometric profile is registered with 512D ArcFace vector embedding!'
+          );
         }}
-        onCancel={() => setIsEnrolling(false)}
+        onCancel={() => {
+          setIsEnrolling(false);
+          setEnrollingTarget(null);
+        }}
       />
     );
   }
@@ -84,11 +103,11 @@ export default function App() {
     );
   }
 
-  const isManagerOrAdmin = user && (user.role === 'manager' || user.role === 'super_admin');
+  const isManagerOrAdmin = user && (user.role === 'admin' || user.role === 'manager' || user.role === 'super_admin');
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#090d16" />
+      <StatusBar barStyle="dark-content" backgroundColor="#f8fafc" />
       {!user ? (
         <LoginScreen onLoginSuccess={handleLoginSuccess} />
       ) : activePortal === 'management' && isManagerOrAdmin ? (
@@ -96,6 +115,10 @@ export default function App() {
           user={user}
           onLogout={handleLogout}
           onSwitchPortal={() => setActivePortal('employee')}
+          onEnrollEmployee={(empId, empName) => {
+            setEnrollingTarget({ id: empId, name: empName });
+            setIsEnrolling(true);
+          }}
         />
       ) : (
         <EmployeePortal
@@ -103,7 +126,10 @@ export default function App() {
           user={user}
           onLogout={handleLogout}
           onSwitchPortal={isManagerOrAdmin ? () => setActivePortal('management') : undefined}
-          onOpenEnrollment={() => setIsEnrolling(true)}
+          onOpenEnrollment={() => {
+            setEnrollingTarget(null);
+            setIsEnrolling(true);
+          }}
           onOpenAttendanceScan={(remote) => {
             setScanIsRemote(remote);
             setIsScanningAttendance(true);
@@ -117,12 +143,17 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#090d16',
+    backgroundColor: '#f8fafc',
   },
   center: {
     flex: 1,
-    backgroundColor: '#090d16',
+    backgroundColor: '#f8fafc',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  splashLogo: {
+    width: 100,
+    height: 100,
+    borderRadius: 22,
   },
 });

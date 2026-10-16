@@ -1,4 +1,4 @@
-export type UserRole = 'employee' | 'manager' | 'super_admin';
+export type UserRole = 'employee' | 'manager' | 'super_admin' | 'admin';
 export type WorkMode = 'on_site' | 'remote';
 
 export interface User {

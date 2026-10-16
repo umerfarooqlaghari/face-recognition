@@ -30,6 +30,31 @@ export async function loginWithPassword(email: string, password: string): Promis
   return tokens;
 }
 
+export async function signupTenant(payload: {
+  company_name: string;
+  admin_name: string;
+  admin_email: string;
+  admin_password: string;
+  office_name?: string;
+}): Promise<AuthTokens> {
+  const response = await fetch(`${API_BASE_URL}/auth/tenant/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || 'Organization registration failed.');
+  }
+
+  const tokens: AuthTokens = await response.json();
+  await storeSession(tokens);
+  await SecureStore.setItemAsync(REMEMBERED_EMAIL_KEY, payload.admin_email);
+  return tokens;
+}
+
+
 export async function checkBiometricsAvailable(): Promise<{ hasHardware: boolean; isEnrolled: boolean; types: LocalAuthentication.AuthenticationType[] }> {
   const hasHardware = await LocalAuthentication.hasHardwareAsync();
   const isEnrolled = await LocalAuthentication.isEnrolledAsync();

@@ -7,6 +7,8 @@ from app.api.biometrics import router as biometrics_router
 from app.api.work_modes import router as work_modes_router
 from app.api.attendance import router as attendance_router
 from app.api.management import router as management_router
+from app.api.leaves import router as leaves_router
+from app.api.billing import router as billing_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -28,6 +30,8 @@ app.include_router(biometrics_router, prefix="/api")
 app.include_router(work_modes_router, prefix="/api")
 app.include_router(attendance_router, prefix="/api")
 app.include_router(management_router, prefix="/api")
+app.include_router(leaves_router, prefix="/api")
+app.include_router(billing_router, prefix="/api")
 
 @app.get("/")
 async def root():
@@ -36,6 +40,10 @@ async def root():
         "docs": "/docs",
         "health": "/api/health"
     }
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "service": "face-recognition-attendance-backend"}
 
 if __name__ == "__main__":
     import uvicorn

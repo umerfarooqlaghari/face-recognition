@@ -1,5 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
+from pydantic import model_validator
+from typing import List, Union, Optional, Any
+import json
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(".env", "backend/.env"), extra="ignore")
@@ -10,13 +12,36 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     HOST: str = "0.0.0.0"
     PORT: int = 8000
-    ALLOWED_CORS_ORIGINS: List[str] = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8081",
-        "http://192.168.1.100:8081",
-        "*"
-    ]
+    ALLOWED_CORS_ORIGINS: Union[List[str], str] = "*"
+    CORS_ORIGINS: Optional[Union[List[str], str]] = None
+
+    @staticmethod
+    def _parse_origins(val: Any) -> List[str]:
+        if not val:
+            return ["*"]
+        if isinstance(val, str):
+            v_stripped = val.strip()
+            if not v_stripped:
+                return ["*"]
+            if v_stripped.startswith("[") and v_stripped.endswith("]"):
+                try:
+                    parsed = json.loads(v_stripped)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    pass
+            # Split comma-separated string
+            return [i.strip() for i in v_stripped.split(",") if i.strip()]
+        elif isinstance(val, (list, tuple)):
+            return [str(i).strip() for i in val if str(i).strip()]
+        return ["*"]
+
+    @model_validator(mode="after")
+    def resolve_cors(self) -> "Settings":
+        # Check CORS_ORIGINS first (from docker-compose / render), then ALLOWED_CORS_ORIGINS
+        raw_val = self.CORS_ORIGINS if self.CORS_ORIGINS is not None else self.ALLOWED_CORS_ORIGINS
+        self.ALLOWED_CORS_ORIGINS = self._parse_origins(raw_val)
+        return self
 
     # Render PostgreSQL
     DATABASE_URL: str = ""

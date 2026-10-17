@@ -9,6 +9,7 @@ import {
   Dimensions,
   Platform,
   Linking,
+  SafeAreaView,
 } from 'react-native';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { getCurrentGPSLocation, LocationCoordinates } from '../services/location';
@@ -146,7 +147,13 @@ export default function AttendanceCameraScreen({
 
   return (
     <View style={styles.container}>
-      <CameraView ref={cameraRef} style={styles.camera} facing={facing}>
+      <CameraView
+        ref={cameraRef}
+        style={StyleSheet.absoluteFill}
+        facing={facing}
+      />
+
+      <SafeAreaView style={styles.overlayHUD} pointerEvents="box-none">
         {/* Header HUD */}
         <View style={styles.overlayHeader}>
           <TouchableOpacity style={styles.closeBtn} onPress={onCancel}>
@@ -176,7 +183,7 @@ export default function AttendanceCameraScreen({
         </View>
 
         {/* Center Scanner HUD */}
-        <View style={styles.ovalContainer}>
+        <View style={styles.ovalContainer} pointerEvents="none">
           <View
             style={[
               styles.scannerOval,
@@ -229,7 +236,7 @@ export default function AttendanceCameraScreen({
             </View>
           )}
         </View>
-      </CameraView>
+      </SafeAreaView>
     </View>
   );
 }
@@ -239,7 +246,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000000',
   },
-  camera: {
+  overlayHUD: {
     flex: 1,
     justifyContent: 'space-between',
   },

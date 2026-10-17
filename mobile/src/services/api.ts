@@ -2,7 +2,7 @@ import * as SecureStore from 'expo-secure-store';
 import { AuthTokens, User } from '../types';
 import { getDeviceTelemetry } from './device';
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000/api';
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://face-recognition-nx5p.onrender.com/api';
 
 const TOKEN_KEY = 'attend_access_token_v1';
 const REFRESH_KEY = 'attend_refresh_token_v1';

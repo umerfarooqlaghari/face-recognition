@@ -4,7 +4,7 @@ import { AuthTokens } from '../types';
 import { getDeviceTelemetry } from './device';
 import { storeSession, clearSession } from './api';
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000/api';
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://face-recognition-nx5p.onrender.com/api';
 const REMEMBERED_EMAIL_KEY = 'attend_remembered_email_v1';
 
 export async function loginWithPassword(email: string, password: string): Promise<AuthTokens> {
@@ -20,8 +20,11 @@ export async function loginWithPassword(email: string, password: string): Promis
   });
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail || 'Login failed. Please verify credentials.');
+    const errorData = await response.json().catch(() => null);
+    if (errorData && errorData.detail) {
+      throw new Error(errorData.detail);
+    }
+    throw new Error(`Connection error (${response.status} ${response.statusText || 'Error'}). Please check backend status.`);
   }
 
   const tokens: AuthTokens = await response.json();

@@ -70,3 +70,15 @@ async def test_auth_workflow_and_device_binding():
         # 5. Old Refresh Token Must Now Be Invalid
         stale_ref_res = await client.post("/api/auth/refresh", json=refresh_payload)
         assert stale_ref_res.status_code == 401
+
+        # 6. Self-Serve Account Deletion (Apple Guideline 5.1.1(v))
+        del_res = await client.delete(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {new_tokens['access_token']}"}
+        )
+        assert del_res.status_code == 200
+        assert del_res.json()["status"] == "success"
+
+        # 7. Verification: Deleted account can no longer authenticate
+        re_login = await client.post("/api/auth/login", json=login_payload)
+        assert re_login.status_code == 401

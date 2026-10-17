@@ -90,19 +90,25 @@ async def verify_invite_token(token: str, db: AsyncSession = Depends(get_db)):
         expires_at=invite.expires_at
     )
 
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from app.core.security import decode_access_token
+
+optional_security = HTTPBearer(auto_error=False)
+
 @router.post("/enroll", response_model=EnrollmentResponse)
 async def enroll_face_reference(
     file: UploadFile = File(...),
     invite_token: Optional[str] = Form(None),
     user_id: Optional[str] = Form(None),
+    auth_creds: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Enrolls a reference face photograph:
     - Validates image dimensions, quality, and sharpness.
     - Generates 512D ArcFace vector embedding.
-    - Stores into Render PostgreSQL biometric_profiles with pgvector.
-    - Marks invite token as used (if provided).
+    - Stores into PostgreSQL biometric_profiles with pgvector.
+    - Strictly authenticated: Requires either a valid one-time invite token OR an authenticated session.
     """
     target_user_id = None
     invite_obj = None
@@ -118,13 +124,46 @@ async def enroll_face_reference(
         if invite_obj.used_at is not None:
             raise HTTPException(status_code=400, detail="Face enrollment token has already been used")
         target_user_id = invite_obj.user_id
-    elif user_id:
-        try:
-            target_user_id = uuid.UUID(user_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid user_id format")
     else:
-        raise HTTPException(status_code=400, detail="Either invite_token or user_id must be provided")
+        # Require authenticated session when no invite token is provided
+        if not auth_creds or not auth_creds.credentials:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication or valid invitation token required to enroll biometric profile"
+            )
+        payload = decode_access_token(auth_creds.credentials)
+        if not payload or "sub" not in payload:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session token")
+
+        caller_id = uuid.UUID(payload["sub"])
+        caller_res = await db.execute(select(User).where(User.id == caller_id))
+        caller = caller_res.scalar_one_or_none()
+        if not caller or not caller.is_active:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Active user session required")
+
+        if user_id:
+            try:
+                requested_target_id = uuid.UUID(user_id)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid user_id format")
+
+            # If targeting another employee, caller MUST be a manager or admin in the same tenant
+            if requested_target_id != caller.id:
+                if caller.role not in ["manager", "admin", "super_admin"]:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Only administrators and managers can enroll biometrics for other team members"
+                    )
+                target_user_res = await db.execute(
+                    select(User).where(User.id == requested_target_id, User.tenant_id == caller.tenant_id)
+                )
+                if not target_user_res.scalar_one_or_none():
+                    raise HTTPException(status_code=404, detail="Target employee not found in your organization")
+                target_user_id = requested_target_id
+            else:
+                target_user_id = caller.id
+        else:
+            target_user_id = caller.id
 
     # Verify user exists
     user_res = await db.execute(select(User).where(User.id == target_user_id))
@@ -181,7 +220,21 @@ async def enroll_face_reference(
     )
 
 @router.get("/profile/{user_id}", response_model=BiometricProfileResponse)
-async def get_biometric_profile(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_biometric_profile(
+    user_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # Only allow the user themselves or an admin/manager in the same tenant
+    if current_user.id != user_id:
+        if current_user.role not in ["manager", "admin", "super_admin"]:
+            raise HTTPException(status_code=403, detail="Access denied to biometric profile")
+        target_check = await db.execute(
+            select(User).where(User.id == user_id, User.tenant_id == current_user.tenant_id)
+        )
+        if not target_check.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Employee not found in your organization")
+
     res = await db.execute(select(BiometricProfile).where(BiometricProfile.user_id == user_id))
     profile = res.scalar_one_or_none()
     if not profile:

@@ -80,6 +80,7 @@ async def test_realtime_attendance_checkin_flow():
         face_img_bytes = generate_test_face()
         enroll_res = await client.post(
             "/api/biometrics/enroll",
+            headers={"Authorization": f"Bearer {emp_token}"},
             data={"user_id": emp_id},
             files={"file": ("ref.jpg", face_img_bytes, "image/jpeg")}
         )
@@ -142,12 +143,18 @@ async def test_realtime_attendance_checkin_flow():
         assert checkout_res.json()["check_out_time"] is not None
 
         # 8. Verify Status & History Endpoints
-        today_res = await client.get(f"/api/attendance/today/{emp_id}")
+        today_res = await client.get(
+            f"/api/attendance/today/{emp_id}",
+            headers={"Authorization": f"Bearer {emp_token}"}
+        )
         assert today_res.status_code == 200
         today_json = today_res.json()
         assert today_json["has_checked_in"] is True
         assert today_json["has_checked_out"] is True
 
-        history_res = await client.get(f"/api/attendance/history/{emp_id}")
+        history_res = await client.get(
+            f"/api/attendance/history/{emp_id}",
+            headers={"Authorization": f"Bearer {emp_token}"}
+        )
         assert history_res.status_code == 200
         assert len(history_res.json()) >= 1

@@ -8,6 +8,7 @@ import {
   Alert,
   Dimensions,
   Platform,
+  Linking,
 } from 'react-native';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { getCurrentGPSLocation, LocationCoordinates } from '../services/location';
@@ -40,6 +41,24 @@ export default function AttendanceCameraScreen({
 
   const cameraRef = useRef<CameraView>(null);
 
+  const handleRequestPermission = async () => {
+    if (permission && !permission.canAskAgain) {
+      await Linking.openSettings();
+    } else {
+      const res = await requestPermission();
+      if (!res.granted) {
+        Alert.alert(
+          'Camera Access Required',
+          'Please enable camera access in your device settings to scan your face for attendance.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ]
+        );
+      }
+    }
+  };
+
   useEffect(() => {
     (async () => {
       try {
@@ -69,8 +88,8 @@ export default function AttendanceCameraScreen({
     return (
       <View style={styles.centerContainer}>
         <Text style={styles.permissionText}>Camera permission is required to scan your face for attendance.</Text>
-        <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
-          <Text style={styles.permissionButtonText}>Grant Camera Permission</Text>
+        <TouchableOpacity style={styles.permissionButton} onPress={handleRequestPermission}>
+          <Text style={styles.permissionButtonText}>Enable Camera in Settings</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.cancelTextButton} onPress={onCancel}>
           <Text style={styles.cancelText}>Cancel</Text>

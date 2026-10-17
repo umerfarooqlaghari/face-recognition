@@ -12,6 +12,11 @@
       "distribution": "internal",
       "ios": {
         "simulator": false
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://face-scan.alpha-devs.cloud/api",
+        "EXPO_PUBLIC_PRIVACY_URL": "https://face-scan.alpha-devs.cloud/privacy",
+        "EXPO_PUBLIC_TERMS_URL": "https://face-scan.alpha-devs.cloud/terms"
       }
     },
     "production": {
@@ -19,6 +24,11 @@
       "autoIncrement": true,
       "ios": {
         "simulator": false
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://face-scan.alpha-devs.cloud/api",
+        "EXPO_PUBLIC_PRIVACY_URL": "https://face-scan.alpha-devs.cloud/privacy",
+        "EXPO_PUBLIC_TERMS_URL": "https://face-scan.alpha-devs.cloud/terms"
       }
     }
   },

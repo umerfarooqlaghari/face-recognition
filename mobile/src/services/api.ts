@@ -162,11 +162,23 @@ export async function enrollFaceReference(
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${API_BASE_URL}/biometrics/enroll`, {
+  let res = await fetch(`${API_BASE_URL}/biometrics/enroll`, {
     method: 'POST',
     headers,
     body: formData,
   });
+
+  if (res.status === 401) {
+    const newTokens = await refreshSession();
+    if (newTokens) {
+      headers['Authorization'] = `Bearer ${newTokens.access_token}`;
+      res = await fetch(`${API_BASE_URL}/biometrics/enroll`, {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+    }
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -325,11 +337,23 @@ export async function markAttendanceCheckIn(params: {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${API_BASE_URL}/attendance/check-in`, {
+  let res = await fetch(`${API_BASE_URL}/attendance/check-in`, {
     method: 'POST',
     headers,
     body: formData,
   });
+
+  if (res.status === 401) {
+    const newTokens = await refreshSession();
+    if (newTokens) {
+      headers['Authorization'] = `Bearer ${newTokens.access_token}`;
+      res = await fetch(`${API_BASE_URL}/attendance/check-in`, {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+    }
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -421,16 +445,22 @@ export interface LeaveItem {
 }
 
 export async function applyLeave(payload: {
-  startDate: string;
-  endDate: string;
+  startDate?: string;
+  endDate?: string;
+  dates?: string[];
   reason: string;
 }): Promise<LeaveItem> {
+  const sortedDates = payload.dates && payload.dates.length > 0 ? [...payload.dates].sort() : [];
+  const startDate = payload.startDate || sortedDates[0];
+  const endDate = payload.endDate || sortedDates[sortedDates.length - 1];
+
   const res = await authFetch('/leaves/apply', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      start_date: payload.startDate,
-      end_date: payload.endDate,
+      start_date: startDate,
+      end_date: endDate,
+      dates: sortedDates.length > 0 ? sortedDates : undefined,
       reason: payload.reason,
     }),
   });
@@ -664,5 +694,87 @@ export async function deleteManagementEmployee(employeeId: string): Promise<any>
   }
   return res.json();
 }
+
+export async function deleteMyAccount(): Promise<any> {
+  const res = await authFetch('/auth/me', {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to delete account');
+  }
+  return res.json();
+}
+
+// ---------------- CSV Employee Import API ----------------
+
+export async function downloadEmployeeImportTemplate(): Promise<string> {
+  const res = await authFetch('/management/employees/import/template');
+  if (!res.ok) {
+    throw new Error('Failed to download template');
+  }
+  return res.text();
+}
+
+export async function previewEmployeeImport(formData: FormData): Promise<{
+  total_rows: number;
+  valid_rows: number;
+  invalid_rows: number;
+  preview: Array<{
+    row: number;
+    first_name?: string | null;
+    last_name?: string | null;
+    email?: string | null;
+    employee_code?: string | null;
+    department?: string | null;
+    designation?: string | null;
+    phone_number?: string | null;
+    work_mode?: string | null;
+    valid: boolean;
+    is_duplicate: boolean;
+    errors: string[];
+  }>;
+}> {
+  const res = await authFetch('/management/employees/import/preview', {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to preview CSV file');
+  }
+  return res.json();
+}
+
+export async function commitEmployeeImport(formData: FormData): Promise<{
+  total_rows: number;
+  created: number;
+  skipped: number;
+  created_records: Array<{
+    row: number;
+    employee_code: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+  }>;
+  skipped_records: Array<{
+    row: number;
+    first_name: string;
+    last_name: string;
+    email: string;
+    reason: string;
+  }>;
+}> {
+  const res = await authFetch('/management/employees/import', {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to import CSV');
+  }
+  return res.json();
+}
+
 
 

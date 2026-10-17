@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   TextInput,
   Image,
+  Linking,
 } from 'react-native';
 import { User } from '../types';
 import { getCurrentGPSLocation, LocationCoordinates } from '../services/location';
@@ -20,6 +21,8 @@ import {
   markAttendanceCheckOut,
   applyLeave,
   getMyLeaves,
+  deleteMyAccount,
+  clearSession,
   LeaveItem,
 } from '../services/api';
 import {
@@ -35,6 +38,7 @@ import {
   ChevronRightIcon,
   ClockIcon,
 } from '../components/SvgIcons';
+import LeaveCalendarPicker from '../components/LeaveCalendarPicker';
 
 interface EmployeePortalProps {
   user: User;
@@ -73,8 +77,7 @@ export default function EmployeePortal({
 
   const [leavesList, setLeavesList] = useState<LeaveItem[]>([]);
   const [showLeaveForm, setShowLeaveForm] = useState(false);
-  const [leaveStartDate, setLeaveStartDate] = useState(tomorrowStr);
-  const [leaveEndDate, setLeaveEndDate] = useState(tomorrowStr);
+  const [selectedLeaveDates, setSelectedLeaveDates] = useState<string[]>([tomorrowStr]);
   const [leaveReason, setLeaveReason] = useState('');
   const [leaveSubmitting, setLeaveSubmitting] = useState(false);
 
@@ -99,22 +102,35 @@ export default function EmployeePortal({
   };
 
   const handleApplyLeave = async () => {
+    if (selectedLeaveDates.length === 0) {
+      Alert.alert('Dates Required', 'Please select at least one day on the calendar for your leave request.');
+      return;
+    }
     if (!leaveReason.trim()) {
       Alert.alert('Reason Required', 'Please enter a reason for the leave request.');
       return;
     }
     try {
       setLeaveSubmitting(true);
+      const sorted = [...selectedLeaveDates].sort();
       await applyLeave({
-        startDate: leaveStartDate,
-        endDate: leaveEndDate,
+        dates: sorted,
+        startDate: sorted[0],
+        endDate: sorted[sorted.length - 1],
         reason: leaveReason.trim(),
       });
+
+      const datesSummary =
+        sorted.length === 1
+          ? sorted[0]
+          : `${sorted.length} days (${sorted[0]} to ${sorted[sorted.length - 1]})`;
+
       Alert.alert(
         'Leave Request Submitted',
-        `Your request from ${leaveStartDate} to ${leaveEndDate} has been submitted for management approval.`
+        `Your request for ${datesSummary} has been submitted for management approval.`
       );
       setLeaveReason('');
+      setSelectedLeaveDates([tomorrowStr]);
       setShowLeaveForm(false);
       const updated = await getMyLeaves();
       setLeavesList(updated);
@@ -187,6 +203,30 @@ export default function EmployeePortal({
     } catch (err: any) {
       Alert.alert('Check-Out Failed', err.message);
     }
+  };
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Delete Account & Biometric Data',
+      'Are you sure you want to permanently delete your account? This will erase your personal records, 512D ArcFace biometric embedding, and all attendance logs. This action is irreversible.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Permanently Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteMyAccount();
+              await clearSession();
+              Alert.alert('Account Deleted', 'Your account and biometric data have been permanently deleted.');
+              onLogout();
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Failed to delete account');
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -377,22 +417,10 @@ export default function EmployeePortal({
 
         {showLeaveForm && (
           <View style={styles.leaveForm}>
-            <Text style={styles.formLabel}>Start Date (YYYY-MM-DD)</Text>
-            <TextInput
-              style={styles.input}
-              value={leaveStartDate}
-              onChangeText={setLeaveStartDate}
-              placeholder="2026-10-15"
-              placeholderTextColor="#94a3b8"
-            />
-
-            <Text style={styles.formLabel}>End Date (YYYY-MM-DD)</Text>
-            <TextInput
-              style={styles.input}
-              value={leaveEndDate}
-              onChangeText={setLeaveEndDate}
-              placeholder="2026-10-16"
-              placeholderTextColor="#94a3b8"
+            <Text style={styles.formLabel}>Select Leave Date(s)</Text>
+            <LeaveCalendarPicker
+              selectedDates={selectedLeaveDates}
+              onSelectDates={setSelectedLeaveDates}
             />
 
             <Text style={styles.formLabel}>Reason for Leave</Text>
@@ -406,14 +434,23 @@ export default function EmployeePortal({
             />
 
             <TouchableOpacity
-              style={styles.submitLeaveBtn}
+              style={[
+                styles.submitLeaveBtn,
+                (selectedLeaveDates.length === 0 || !leaveReason.trim()) && styles.submitLeaveBtnDisabled,
+              ]}
               onPress={handleApplyLeave}
-              disabled={leaveSubmitting}
+              disabled={leaveSubmitting || selectedLeaveDates.length === 0}
             >
               {leaveSubmitting ? (
                 <ActivityIndicator size="small" color="#ffffff" />
               ) : (
-                <Text style={styles.submitLeaveBtnText}>Submit Leave Request</Text>
+                <Text style={styles.submitLeaveBtnText}>
+                  {selectedLeaveDates.length === 0
+                    ? 'Select Dates on Calendar'
+                    : `Submit Leave Request (${selectedLeaveDates.length} ${
+                        selectedLeaveDates.length === 1 ? 'Day' : 'Days'
+                      })`}
+                </Text>
               )}
             </TouchableOpacity>
           </View>
@@ -499,6 +536,22 @@ export default function EmployeePortal({
           <Text style={styles.enrollmentCTAText}>Update Face Biometric Reference</Text>
         </TouchableOpacity>
       )}
+
+      {/* Account Deletion & Privacy Policy (Apple Review Guideline 5.1.1(v) Compliance) */}
+      <View style={styles.complianceCard}>
+        <TouchableOpacity style={styles.deleteAccountBtn} onPress={handleDeleteAccount}>
+          <Text style={styles.deleteAccountBtnText}>Delete My Account & Face Data</Text>
+        </TouchableOpacity>
+        <View style={styles.legalFooterRow}>
+          <TouchableOpacity onPress={() => Linking.openURL('https://face-scan.alpha-devs.cloud/privacy')}>
+            <Text style={styles.legalFooterLink}>Privacy Policy</Text>
+          </TouchableOpacity>
+          <Text style={styles.legalFooterDivider}>•</Text>
+          <TouchableOpacity onPress={() => Linking.openURL('https://face-scan.alpha-devs.cloud/terms')}>
+            <Text style={styles.legalFooterLink}>Terms of Service</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
     </ScrollView>
   );
 }
@@ -929,6 +982,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 12,
   },
+  submitLeaveBtnDisabled: {
+    backgroundColor: '#94a3b8',
+    opacity: 0.7,
+  },
   submitLeaveBtnText: {
     color: '#ffffff',
     fontWeight: '700',
@@ -988,5 +1045,42 @@ const styles = StyleSheet.create({
   leaveStatusPillText: {
     fontSize: 10,
     fontWeight: '800',
+  },
+  complianceCard: {
+    marginTop: 20,
+    alignItems: 'center',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  deleteAccountBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    backgroundColor: '#fef2f2',
+    marginBottom: 16,
+  },
+  deleteAccountBtnText: {
+    color: '#dc2626',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  legalFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  legalFooterLink: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+  legalFooterDivider: {
+    fontSize: 12,
+    color: '#cbd5e1',
   },
 });

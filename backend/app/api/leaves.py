@@ -77,19 +77,40 @@ async def apply_for_leave(
 
     initial_status = "pending_manager" if target_user.manager_id else "pending"
 
-    new_leave = Leave(
-        tenant_id=current_user.tenant_id,
-        user_id=target_user_id,
-        start_date=req.start_date,
-        end_date=req.end_date,
-        reason=req.reason.strip(),
-        status=initial_status
-    )
-    db.add(new_leave)
-    await db.commit()
-    await db.refresh(new_leave)
+    from datetime import timedelta
+    ranges = []
+    if req.dates and len(req.dates) > 0:
+        sorted_d = sorted(set(req.dates))
+        r_start = sorted_d[0]
+        r_end = sorted_d[0]
+        for d in sorted_d[1:]:
+            if d == r_end + timedelta(days=1):
+                r_end = d
+            else:
+                ranges.append((r_start, r_end))
+                r_start = d
+                r_end = d
+        ranges.append((r_start, r_end))
+    else:
+        ranges = [(req.start_date, req.end_date)]
 
-    return await build_leave_response(db, new_leave, target_user)
+    created_leaves = []
+    for r_start, r_end in ranges:
+        new_leave = Leave(
+            tenant_id=current_user.tenant_id,
+            user_id=target_user_id,
+            start_date=r_start,
+            end_date=r_end,
+            reason=req.reason.strip(),
+            status=initial_status
+        )
+        db.add(new_leave)
+        created_leaves.append(new_leave)
+
+    await db.commit()
+    await db.refresh(created_leaves[0])
+
+    return await build_leave_response(db, created_leaves[0], target_user)
 
 @router.get("/my-leaves", response_model=List[LeaveResponse])
 async def get_my_leaves(

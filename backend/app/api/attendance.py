@@ -211,7 +211,21 @@ async def mark_attendance_check_out(
     )
 
 @router.get("/today/{user_id}", response_model=AttendanceTodayStatus)
-async def get_today_attendance_status(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_today_attendance_status(
+    user_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # Authorization check
+    if current_user.id != user_id:
+        if current_user.role not in ["manager", "admin", "super_admin"]:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        target_check = await db.execute(
+            select(User).where(User.id == user_id, User.tenant_id == current_user.tenant_id)
+        )
+        if not target_check.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Employee not found in your organization")
+
     today = date.today()
     rec_res = await db.execute(
         select(AttendanceRecord).where(
@@ -255,8 +269,19 @@ async def get_today_attendance_status(user_id: uuid.UUID, db: AsyncSession = Dep
 async def get_attendance_history(
     user_id: uuid.UUID,
     limit: int = 30,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
+    # Authorization check
+    if current_user.id != user_id:
+        if current_user.role not in ["manager", "admin", "super_admin"]:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        target_check = await db.execute(
+            select(User).where(User.id == user_id, User.tenant_id == current_user.tenant_id)
+        )
+        if not target_check.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Employee not found in your organization")
+
     res = await db.execute(
         select(AttendanceRecord)
         .where(AttendanceRecord.user_id == user_id)

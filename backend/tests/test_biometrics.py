@@ -103,7 +103,10 @@ async def test_face_invite_and_enrollment_workflow():
         assert "already been used" in reuse_res.text
 
         # 7. Check Profile Endpoint
-        profile_res = await client.get(f"/api/biometrics/profile/{emp_id}")
+        profile_res = await client.get(
+            f"/api/biometrics/profile/{emp_id}",
+            headers={"Authorization": f"Bearer {mgr_token}"}
+        )
         assert profile_res.status_code == 200
         assert profile_res.json()["is_verified"] is True
 
@@ -112,6 +115,7 @@ async def test_face_invite_and_enrollment_workflow():
         Image.new("RGB", (50, 50), color=(100, 100, 100)).save(low_res, format="JPEG")
         bad_enroll = await client.post(
             "/api/biometrics/enroll",
+            headers={"Authorization": f"Bearer {mgr_token}"},
             data={"user_id": emp_id},
             files={"file": ("tiny.jpg", low_res.getvalue(), "image/jpeg")}
         )

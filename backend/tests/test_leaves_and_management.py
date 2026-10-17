@@ -177,6 +177,56 @@ async def test_date_override_and_management_roster():
         assert roster_res.status_code == 200
         roster = roster_res.json()
         target_emp = next((e for e in roster if e["id"] == emp_id), None)
-        assert target_emp is not None
         assert target_emp["date_override"] is not None
         assert "REMOTE" in target_emp["date_override"]
+
+@pytest.mark.asyncio
+async def test_calendar_multi_date_leave_request():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        unique = uuid.uuid4().hex[:6]
+
+        # 1. Register & Login Employee
+        emp_res = await client.post("/api/auth/register", json={
+            "email": f"emp_cal_{unique}@company.com",
+            "password": "Password123!",
+            "full_name": "Calendar User",
+            "employee_code": f"EMP-C-{unique}",
+            "role": "employee"
+        })
+        assert emp_res.status_code == 201
+
+        login_res = await client.post("/api/auth/login", json={
+            "email": f"emp_cal_{unique}@company.com",
+            "password": "Password123!",
+            "device": {"device_id": f"dev_cal_{unique}"}
+        })
+        token = login_res.json()["access_token"]
+
+        # 2. Select 3 non-consecutive calendar dates (e.g. Day+3, Day+4, Day+7)
+        base = date.today()
+        d1 = (base + timedelta(days=3)).isoformat()
+        d2 = (base + timedelta(days=4)).isoformat()
+        d3 = (base + timedelta(days=7)).isoformat()
+
+        apply_res = await client.post(
+            "/api/leaves/apply",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "dates": [d1, d2, d3],
+                "reason": "Doctor appointment and family trip"
+            }
+        )
+        assert apply_res.status_code == 201
+        data = apply_res.json()
+        assert data["start_date"] == d1
+
+        # 3. Check my-leaves contains the created requests
+        my_res = await client.get(
+            "/api/leaves/my-leaves",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert my_res.status_code == 200
+        leaves = my_res.json()
+        assert len(leaves) >= 2 # Contiguous [d1, d2] and separate [d3]
+

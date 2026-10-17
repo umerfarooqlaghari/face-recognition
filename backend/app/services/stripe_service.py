@@ -198,10 +198,12 @@ async def handle_stripe_webhook_event(payload: bytes, sig_header: str, db: Async
     try:
         if webhook_secret and webhook_secret != "whsec_placeholder":
             event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
-        else:
-            # Fallback for dev mode when testing without signature verification
+        elif settings.DEBUG:
+            # Fallback ONLY when explicit DEBUG mode is enabled in local development
             import json
             event = json.loads(payload.decode("utf-8"))
+        else:
+            raise ValueError("Stripe Webhook Secret is not configured in production environment")
     except Exception as e:
         logger.error(f"Stripe Webhook Signature Verification Failed: {e}")
         raise ValueError(f"Webhook error: {str(e)}")

@@ -3,16 +3,27 @@ from typing import Optional
 import uuid
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from typing import Optional, List
+
 class LeaveApplyRequest(BaseModel):
-    start_date: date
-    end_date: date
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    dates: Optional[List[date]] = None
     reason: str = Field(..., min_length=3, max_length=500)
     leave_type: Optional[str] = "Annual Leave"
     user_id: Optional[uuid.UUID] = None
 
     @model_validator(mode="after")
-    def validate_date_range(self):
-        if self.end_date < self.start_date:
+    def validate_dates(self):
+        if self.dates and len(self.dates) > 0:
+            sorted_dates = sorted(self.dates)
+            if not self.start_date:
+                self.start_date = sorted_dates[0]
+            if not self.end_date:
+                self.end_date = sorted_dates[-1]
+        elif not self.start_date or not self.end_date:
+            raise ValueError("Please provide either a list of dates or start_date and end_date")
+        elif self.end_date < self.start_date:
             raise ValueError("End date must be greater than or equal to start date")
         return self
 

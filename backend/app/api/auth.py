@@ -413,3 +413,100 @@ async def revoke_all_other_devices(
         "message": f"Revoked {len(other_devices)} other active device sessions."
     }
 
+@router.delete("/me", status_code=status.HTTP_200_OK)
+@router.delete("/delete-account", status_code=status.HTTP_200_OK)
+async def delete_my_account(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Self-serve account deletion for Apple App Store Guideline 5.1.1(v) compliance.
+    Permanently deletes the user's account, 512D ArcFace biometric embedding,
+    registered device sessions, and associated attendance history.
+    """
+    from app.services.stripe_service import sync_subscription_seats
+    from app.models.models import Leave, AttendanceRequest, WorkModeOverride
+
+    user_id = current_user.id
+    tenant_id = current_user.tenant_id
+
+    # Check if this user is a manager or approver on any leaves/requests and nullify references
+    await db.execute(
+        select(Leave).where(
+            (Leave.approved_by == user_id) |
+            (Leave.level1_approved_by == user_id) |
+            (Leave.level2_approved_by == user_id)
+        )
+    )
+    from sqlalchemy import update, delete
+    from app.models.models import BiometricProfile, AttendanceRecord, FaceScanInvite, WorkModeOverride
+
+    # Explicitly remove child records to avoid nullification or constraint errors
+    await db.execute(delete(UserDevice).where(UserDevice.user_id == user_id))
+    await db.execute(delete(BiometricProfile).where(BiometricProfile.user_id == user_id))
+    await db.execute(delete(AttendanceRecord).where(AttendanceRecord.user_id == user_id))
+    await db.execute(delete(Leave).where(Leave.user_id == user_id))
+    await db.execute(delete(AttendanceRequest).where(AttendanceRequest.user_id == user_id))
+    await db.execute(delete(FaceScanInvite).where(FaceScanInvite.user_id == user_id))
+    await db.execute(delete(WorkModeOverride).where(WorkModeOverride.user_id == user_id))
+
+    # Nullify approver/creator links on other users' records
+    await db.execute(
+        update(Leave)
+        .where(Leave.approved_by == user_id)
+        .values(approved_by=None)
+    )
+    await db.execute(
+        update(Leave)
+        .where(Leave.level1_approved_by == user_id)
+        .values(level1_approved_by=None)
+    )
+    await db.execute(
+        update(Leave)
+        .where(Leave.level2_approved_by == user_id)
+        .values(level2_approved_by=None)
+    )
+    await db.execute(
+        update(AttendanceRequest)
+        .where(AttendanceRequest.reviewed_by == user_id)
+        .values(reviewed_by=None)
+    )
+    await db.execute(
+        update(WorkModeOverride)
+        .where(WorkModeOverride.created_by == user_id)
+        .values(created_by=None)
+    )
+    await db.execute(
+        update(User)
+        .where(User.manager_id == user_id)
+        .values(manager_id=None)
+    )
+
+    # Check if user is the sole admin or if there are other users
+    all_users_res = await db.execute(select(User).where(User.tenant_id == tenant_id))
+    all_users = all_users_res.scalars().all()
+
+    is_sole_user = len(all_users) <= 1
+    tenant_res = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = tenant_res.scalar_one_or_none()
+
+    # Delete the user record
+    await db.delete(current_user)
+    await db.commit()
+
+    # If this was the sole user of the organization, deactivate or delete the tenant
+    if is_sole_user and tenant:
+        tenant.is_active = False
+        tenant.subscription_status = "canceled"
+        await db.commit()
+    elif tenant and tenant.stripe_subscription_id:
+        try:
+            await sync_subscription_seats(tenant, db)
+        except Exception:
+            pass
+
+    return {
+        "status": "success",
+        "message": "Your account, personal data, and biometric face profiles have been permanently deleted."
+    }
+

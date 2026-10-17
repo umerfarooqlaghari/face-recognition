@@ -184,3 +184,38 @@ export const GpsIcon: React.FC<IconProps> = ({ size = 16, color = '#38bdf8' }) =
   </Svg>
 );
 
+export const CalendarIcon: React.FC<IconProps> = ({ size = 18, color = '#1e3a8a' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+    <Line x1="16" y1="2" x2="16" y2="6" />
+    <Line x1="8" y1="2" x2="8" y2="6" />
+    <Line x1="3" y1="10" x2="21" y2="10" />
+  </Svg>
+);
+
+export const ChevronLeftIcon: React.FC<IconProps> = ({ size = 18, color = '#1e3a8a' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <Polyline points="15 18 9 12 15 6" />
+  </Svg>
+);
+
+export const UploadCloudIcon: React.FC<IconProps> = ({ size = 18, color = '#1e3a8a' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Polyline points="16 16 12 12 8 16" />
+    <Line x1="12" y1="12" x2="12" y2="21" />
+    <Path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3" />
+    <Polyline points="16 16 12 12 8 16" />
+  </Svg>
+);
+
+export const FileTextIcon: React.FC<IconProps> = ({ size = 18, color = '#1e3a8a' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <Polyline points="14 2 14 8 20 8" />
+    <Line x1="16" y1="13" x2="8" y2="13" />
+    <Line x1="16" y1="17" x2="8" y2="17" />
+    <Polyline points="10 9 9 9 8 9" />
+  </Svg>
+);
+
+

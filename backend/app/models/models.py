@@ -80,10 +80,10 @@ class User(Base):
     tenant = relationship("Tenant", back_populates="users")
     office = relationship("Office", back_populates="users")
     manager = relationship("User", remote_side=[id], foreign_keys=[manager_id])
-    biometric_profile = relationship("BiometricProfile", back_populates="user", uselist=False)
-    devices = relationship("UserDevice", back_populates="user")
-    attendance_records = relationship("AttendanceRecord", back_populates="user")
-    leaves = relationship("Leave", back_populates="user", foreign_keys="[Leave.user_id]")
+    biometric_profile = relationship("BiometricProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    devices = relationship("UserDevice", back_populates="user", cascade="all, delete-orphan")
+    attendance_records = relationship("AttendanceRecord", back_populates="user", cascade="all, delete-orphan")
+    leaves = relationship("Leave", back_populates="user", foreign_keys="[Leave.user_id]", cascade="all, delete-orphan")
 
 class BiometricProfile(Base):
     __tablename__ = "biometric_profiles"

@@ -84,3 +84,46 @@ class TenantStatsResponse(BaseModel):
     remote_employees: int
     today_checkins: int
     attendance_rate: float
+
+class EmployeeImportPreviewRow(BaseModel):
+    row: int
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    employee_code: Optional[str] = None
+    department: Optional[str] = "General"
+    designation: Optional[str] = "Team Member"
+    phone_number: Optional[str] = None
+    default_work_mode: Optional[str] = "on_site"
+    is_duplicate: bool = False
+    errors: List[str] = []
+    valid: bool = True
+
+class EmployeeImportPreviewResponse(BaseModel):
+    total_rows: int
+    valid_rows: int
+    invalid_rows: int
+    duplicate_rows: int
+    preview: List[EmployeeImportPreviewRow]
+
+class EmployeeImportCreatedItem(BaseModel):
+    row: int
+    id: uuid.UUID
+    employee_code: str
+    email: str
+    full_name: str
+    temporary_password: str
+
+class EmployeeImportSkippedItem(BaseModel):
+    row: int
+    email: Optional[str] = None
+    name: Optional[str] = None
+    reason: str
+
+class EmployeeImportCommitResponse(BaseModel):
+    total_rows: int
+    created: int
+    skipped: int
+    created_records: List[EmployeeImportCreatedItem]
+    skipped_records: List[EmployeeImportSkippedItem]

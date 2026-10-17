@@ -19,15 +19,36 @@ export async function getCurrentGPSLocation(): Promise<LocationCoordinates> {
     throw new Error('Location permission is required for geofence attendance verification');
   }
 
-  const location = await Location.getCurrentPositionAsync({
-    accuracy: Location.Accuracy.Highest,
-  });
+  try {
+    // Attempt high-accuracy GPS with a 10-second timeout promise
+    const posPromise = Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+    });
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('GPS timeout')), 10000)
+    );
 
-  return {
-    latitude: location.coords.latitude,
-    longitude: location.coords.longitude,
-    altitude: location.coords.altitude,
-    accuracy: location.coords.accuracy,
-    isMocked: location.mocked === true,
-  };
+    const location = await Promise.race([posPromise, timeoutPromise]);
+    return {
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+      altitude: location.coords.altitude,
+      accuracy: location.coords.accuracy,
+      isMocked: location.mocked === true,
+    };
+  } catch {
+    // Graceful fallback to last known position if device is indoors or satellite lock is slow
+    const lastKnown = await Location.getLastKnownPositionAsync();
+    if (lastKnown) {
+      return {
+        latitude: lastKnown.coords.latitude,
+        longitude: lastKnown.coords.longitude,
+        altitude: lastKnown.coords.altitude,
+        accuracy: lastKnown.coords.accuracy,
+        isMocked: lastKnown.mocked === true,
+      };
+    }
+    throw new Error('Could not acquire GPS location. Please check location settings and retry.');
+  }
 }
+

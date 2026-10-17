@@ -1,9 +1,12 @@
 import uuid
 import secrets
 import string
+import csv
+import io
+import re
 from datetime import datetime, timezone, timedelta, date
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Response, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 
@@ -19,7 +22,12 @@ from app.schemas.tenant import (
     EmployeeCreateRequest,
     EmployeeUpdateRequest,
     EmployeeCreateResponse,
-    TenantStatsResponse
+    TenantStatsResponse,
+    EmployeeImportPreviewRow,
+    EmployeeImportPreviewResponse,
+    EmployeeImportCommitResponse,
+    EmployeeImportCreatedItem,
+    EmployeeImportSkippedItem,
 )
 from app.services.email_service import send_employee_welcome_email
 from app.services.stripe_service import sync_subscription_seats
@@ -515,5 +523,418 @@ async def update_employee(
             "default_work_mode": emp.default_work_mode
         }
     }
+
+
+# ─── Bulk Employee CSV Import ──────────────────────────────────────────────────
+
+CSV_TEMPLATE_HEADER = (
+    "First Name,Last Name,Email,Employee Code,Department,Designation,Phone Number,Work Mode\n"
+    "Sarah,Connor,sarah.connor@acme.com,EMP-1001,Engineering,Software Engineer,+1234567890,on_site\n"
+    "John,Doe,john.doe@acme.com,EMP-1002,Operations,Site Coordinator,+1987654321,remote\n"
+)
+
+EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
+
+
+def _get_field(row: Dict[str, str], aliases: List[str]) -> Optional[str]:
+    for key, val in row.items():
+        clean_k = re.sub(r"[^a-z0-9]", "", str(key).lower())
+        for a in aliases:
+            if clean_k == a:
+                v = str(val).strip() if val is not None else ""
+                return v if v else None
+    return None
+
+
+@router.get("/employees/import/template")
+async def get_employee_import_template(
+    current_admin: User = Depends(require_admin),
+):
+    """
+    Downloadable blank sample CSV template for bulk employee onboarding.
+    """
+    return Response(
+        content=CSV_TEMPLATE_HEADER,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="employee_import_template.csv"'
+        },
+    )
+
+
+@router.post(
+    "/employees/import/preview",
+    response_model=EmployeeImportPreviewResponse,
+)
+async def preview_employee_import(
+    file: Optional[UploadFile] = File(None),
+    csv_file: Optional[UploadFile] = File(None, alias="csv"),
+    current_admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Step 2: Parses uploaded CSV and returns per-row validation and duplicate check.
+    No database writes occur during preview.
+    """
+    upload = file or csv_file
+    if not upload:
+        raise HTTPException(status_code=400, detail="No CSV file provided")
+
+    contents = await upload.read()
+    try:
+        decoded = contents.decode("utf-8-sig")  # Handles Excel BOM
+    except Exception:
+        decoded = contents.decode("latin-1", errors="ignore")
+
+    reader = csv.DictReader(io.StringIO(decoded))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV file has no header row")
+
+    rows = list(reader)
+    if not rows:
+        raise HTTPException(status_code=400, detail="CSV file contains no data rows")
+
+    # Fetch existing emails and codes in this organization
+    existing_res = await db.execute(
+        select(User.email, User.employee_code).where(
+            User.tenant_id == current_admin.tenant_id
+        )
+    )
+    existing_pairs = existing_res.all()
+    existing_emails = {
+        p[0].lower() for p in existing_pairs if p[0]
+    }
+    existing_codes = {
+        p[1].lower() for p in existing_pairs if p[1]
+    }
+
+    seen_batch_emails = set()
+    seen_batch_codes = set()
+    preview_items = []
+
+    for idx, row in enumerate(rows):
+        row_num = idx + 2
+        errors = []
+
+        first_name = _get_field(row, ["firstname", "first", "fname"])
+        last_name = _get_field(row, ["lastname", "last", "lname", "surname"])
+        full_name = _get_field(row, ["fullname", "name", "employeename"])
+
+        if not full_name:
+            if first_name and last_name:
+                full_name = f"{first_name} {last_name}".strip()
+            elif first_name:
+                full_name = first_name
+            elif last_name:
+                full_name = last_name
+
+        if not first_name and full_name:
+            parts = full_name.split(" ", 1)
+            first_name = parts[0]
+            last_name = parts[1] if len(parts) > 1 else ""
+
+        email = _get_field(row, ["email", "workemail", "emailaddress"])
+        emp_code = _get_field(row, ["employeecode", "empcode", "code", "staffid", "id", "employeeid"])
+        dept = _get_field(row, ["department", "dept"]) or "General"
+        desig = _get_field(row, ["designation", "role", "title", "jobtitle", "position"]) or "Team Member"
+        phone = _get_field(row, ["phonenumber", "phone", "mobile", "contact"])
+        raw_mode = _get_field(row, ["workmode", "defaultworkmode", "mode", "locationmode"]) or "on_site"
+
+        work_mode = "remote" if "remote" in raw_mode.lower() else "on_site"
+
+        # Validation checks
+        if not full_name:
+            errors.push(f"Row {row_num}: Full Name or First Name is required") if hasattr(errors, 'push') else errors.append(f"Row {row_num}: First Name or Full Name is required")
+
+        is_duplicate = False
+        if not email:
+            errors.append(f"Row {row_num}: Email address is required")
+        else:
+            clean_email = email.lower()
+            if not EMAIL_REGEX.match(clean_email):
+                errors.append(f"Row {row_num}: Invalid email format ({email})")
+            elif clean_email in existing_emails:
+                is_duplicate = True
+                errors.append(f"Row {row_num}: Email '{email}' is already registered in your organization")
+            elif clean_email in seen_batch_emails:
+                is_duplicate = True
+                errors.append(f"Row {row_num}: Duplicate email '{email}' appears multiple times in file")
+            else:
+                seen_batch_emails.add(clean_email)
+
+        if emp_code:
+            clean_code = emp_code.lower()
+            if clean_code in existing_codes:
+                is_duplicate = True
+                errors.append(f"Row {row_num}: Employee code '{emp_code}' is already assigned in organization")
+            elif clean_code in seen_batch_codes:
+                is_duplicate = True
+                errors.append(f"Row {row_num}: Duplicate code '{emp_code}' appears multiple times in file")
+            else:
+                seen_batch_codes.add(clean_code)
+
+        preview_items.append(
+            EmployeeImportPreviewRow(
+                row=row_num,
+                first_name=first_name,
+                last_name=last_name,
+                full_name=full_name,
+                email=email,
+                employee_code=emp_code,
+                department=dept,
+                designation=desig,
+                phone_number=phone,
+                default_work_mode=work_mode,
+                is_duplicate=is_duplicate,
+                errors=errors,
+                valid=len(errors) == 0,
+            )
+        )
+
+    valid_count = sum(1 for p in preview_items if p.valid)
+    invalid_count = sum(1 for p in preview_items if not p.valid)
+    duplicate_count = sum(1 for p in preview_items if p.is_duplicate)
+
+    return EmployeeImportPreviewResponse(
+        total_rows=len(preview_items),
+        valid_rows=valid_count,
+        invalid_rows=invalid_count,
+        duplicate_rows=duplicate_count,
+        preview=preview_items,
+    )
+
+
+@router.post(
+    "/employees/import",
+    response_model=EmployeeImportCommitResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def import_employees_csv(
+    file: Optional[UploadFile] = File(None),
+    csv_file: Optional[UploadFile] = File(None, alias="csv"),
+    current_admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Step 3: Commits valid rows to the database.
+    - Creates employee User records with auto-generated secure passwords.
+    - Provisions 48-hour biometric FaceScanInvite tokens.
+    - Dispatches welcome onboarding emails via AWS SES.
+    - Recalculates and synchronizes Stripe subscription seat counts.
+    """
+    upload = file or csv_file
+    if not upload:
+        raise HTTPException(status_code=400, detail="No CSV file provided")
+
+    contents = await upload.read()
+    try:
+        decoded = contents.decode("utf-8-sig")
+    except Exception:
+        decoded = contents.decode("latin-1", errors="ignore")
+
+    reader = csv.DictReader(io.StringIO(decoded))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV file has no header row")
+
+    rows = list(reader)
+    if not rows:
+        raise HTTPException(status_code=400, detail="CSV file is empty")
+
+    # Fetch existing emails and codes
+    existing_res = await db.execute(
+        select(User.email, User.employee_code).where(
+            User.tenant_id == current_admin.tenant_id
+        )
+    )
+    existing_pairs = existing_res.all()
+    existing_emails = {p[0].lower() for p in existing_pairs if p[0]}
+    existing_codes = {p[1].lower() for p in existing_pairs if p[1]}
+
+    # Office lookup for on_site assignment
+    first_office_res = await db.execute(
+        select(Office).where(Office.tenant_id == current_admin.tenant_id).limit(1)
+    )
+    default_office = first_office_res.scalar_one_or_none()
+    default_office_id = default_office.id if default_office else None
+
+    # Fetch tenant for company name & Stripe sync
+    tenant_res = await db.execute(
+        select(Tenant).where(Tenant.id == current_admin.tenant_id)
+    )
+    tenant = tenant_res.scalar_one_or_none()
+    company_name = tenant.name if tenant else "Attendance Platform"
+
+    created_records = []
+    skipped_records = []
+
+    for idx, row in enumerate(rows):
+        row_num = idx + 2
+
+        first_name = _get_field(row, ["firstname", "first", "fname"])
+        last_name = _get_field(row, ["lastname", "last", "lname", "surname"])
+        full_name = _get_field(row, ["fullname", "name", "employeename"])
+
+        if not full_name:
+            if first_name and last_name:
+                full_name = f"{first_name} {last_name}".strip()
+            elif first_name:
+                full_name = first_name
+            elif last_name:
+                full_name = last_name
+
+        if not first_name and full_name:
+            parts = full_name.split(" ", 1)
+            first_name = parts[0]
+            last_name = parts[1] if len(parts) > 1 else ""
+
+        email = _get_field(row, ["email", "workemail", "emailaddress"])
+        emp_code = _get_field(row, ["employeecode", "empcode", "code", "staffid", "id", "employeeid"])
+        dept = _get_field(row, ["department", "dept"]) or "General"
+        desig = _get_field(row, ["designation", "role", "title", "jobtitle", "position"]) or "Team Member"
+        phone = _get_field(row, ["phonenumber", "phone", "mobile", "contact"])
+        raw_mode = _get_field(row, ["workmode", "defaultworkmode", "mode", "locationmode"]) or "on_site"
+        work_mode = "remote" if "remote" in raw_mode.lower() else "on_site"
+
+        # Validate
+        if not full_name:
+            skipped_records.append(
+                EmployeeImportSkippedItem(
+                    row=row_num,
+                    email=email,
+                    name=full_name,
+                    reason="First Name or Full Name is required",
+                )
+            )
+            continue
+
+        if not email or not EMAIL_REGEX.match(email.lower()):
+            skipped_records.append(
+                EmployeeImportSkippedItem(
+                    row=row_num,
+                    email=email,
+                    name=full_name,
+                    reason=f"Invalid or missing email address: '{email}'",
+                )
+            )
+            continue
+
+        clean_email = email.lower()
+        if clean_email in existing_emails:
+            skipped_records.append(
+                EmployeeImportSkippedItem(
+                    row=row_num,
+                    email=email,
+                    name=full_name,
+                    reason=f"Email '{email}' already registered in organization",
+                )
+            )
+            continue
+
+        # Employee Code assignment
+        if not emp_code:
+            while True:
+                candidate = f"EMP-{secrets.randbelow(9000) + 1000}"
+                if candidate.lower() not in existing_codes:
+                    emp_code = candidate
+                    break
+        elif emp_code.lower() in existing_codes:
+            skipped_records.append(
+                EmployeeImportSkippedItem(
+                    row=row_num,
+                    email=email,
+                    name=full_name,
+                    reason=f"Employee code '{emp_code}' already exists",
+                )
+            )
+            continue
+
+        temp_password = generate_secure_password(12)
+        office_id = default_office_id if work_mode == "on_site" else None
+
+        try:
+            new_user = User(
+                tenant_id=current_admin.tenant_id,
+                email=clean_email,
+                password_hash=hash_password(temp_password),
+                full_name=full_name,
+                first_name=first_name,
+                last_name=last_name,
+                department=dept,
+                designation=desig,
+                phone_number=phone,
+                employee_code=emp_code,
+                role="employee",
+                default_work_mode=work_mode,
+                office_id=office_id,
+                is_active=True,
+            )
+            db.add(new_user)
+            await db.flush()
+
+            # Create 48-hour biometric enrollment token
+            invite_token = f"inv_{secrets.token_urlsafe(24)}"
+            now_utc = datetime.now(timezone.utc)
+            face_invite = FaceScanInvite(
+                tenant_id=current_admin.tenant_id,
+                user_id=new_user.id,
+                invite_token=invite_token,
+                expires_at=now_utc + timedelta(hours=48),
+            )
+            db.add(face_invite)
+
+            # Prevent intra-batch duplicates
+            existing_emails.add(clean_email)
+            existing_codes.add(emp_code.lower())
+
+            # Dispatch Welcome Email
+            try:
+                await send_employee_welcome_email(
+                    to_email=clean_email,
+                    employee_name=full_name,
+                    employee_code=emp_code,
+                    temporary_password=temp_password,
+                    company_name=company_name,
+                    invite_token=invite_token,
+                )
+            except Exception:
+                pass
+
+            created_records.append(
+                EmployeeImportCreatedItem(
+                    row=row_num,
+                    id=new_user.id,
+                    employee_code=emp_code,
+                    email=clean_email,
+                    full_name=full_name,
+                    temporary_password=temp_password,
+                )
+            )
+        except Exception as e:
+            skipped_records.append(
+                EmployeeImportSkippedItem(
+                    row=row_num,
+                    email=email,
+                    name=full_name,
+                    reason=f"Database error: {str(e)}",
+                )
+            )
+
+    await db.commit()
+
+    # Sync Stripe seats if tenant has active subscription
+    if tenant and tenant.stripe_subscription_id:
+        try:
+            await sync_subscription_seats(tenant, db)
+        except Exception:
+            pass
+
+    return EmployeeImportCommitResponse(
+        total_rows=len(rows),
+        created=len(created_records),
+        skipped=len(skipped_records),
+        created_records=created_records,
+        skipped_records=skipped_records,
+    )
+
 
 

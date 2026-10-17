@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import dynamic from "next/dynamic";
 import styles from "./page.module.css";
 
@@ -182,6 +183,36 @@ const CreditCardIcon = ({ size = 16, color = "currentColor" }: { size?: number; 
   </svg>
 );
 
+const UploadCloudIcon = ({ size = 16, color = "currentColor" }: { size?: number; color?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="16 16 12 12 8 16" />
+    <line x1="12" y1="12" x2="12" y2="21" />
+    <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3" />
+    <polyline points="16 16 12 12 8 16" />
+  </svg>
+);
+
+const AlertTriangleIcon = ({ size = 16, color = "currentColor" }: { size?: number; color?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+    <line x1="12" y1="9" x2="12" y2="13" />
+    <line x1="12" y1="17" x2="12.01" y2="17" />
+  </svg>
+);
+
+const ArrowLeftIcon = ({ size = 16, color = "currentColor" }: { size?: number; color?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="19" y1="12" x2="5" y2="12" />
+    <polyline points="12 19 5 12 12 5" />
+  </svg>
+);
+
+const ChevronRightIcon = ({ size = 16, color = "currentColor" }: { size?: number; color?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="9 18 15 12 9 6" />
+  </svg>
+);
+
 const OfficeMapPicker = dynamic(() => import("./components/OfficeMapPicker"), {
   ssr: false,
   loading: () => (
@@ -254,6 +285,52 @@ export default function Home() {
   const [empRole, setEmpRole] = useState("employee");
   const [empManagerId, setEmpManagerId] = useState("");
   const [createdEmployeeResult, setCreatedEmployeeResult] = useState<any | null>(null);
+
+  // CSV Import Wizard State
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importStep, setImportStep] = useState<1 | 2 | 3>(1);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importDragging, setImportDragging] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError] = useState("");
+  const [importPreview, setImportPreview] = useState<{
+    total_rows: number;
+    valid_rows: number;
+    invalid_rows: number;
+    preview: Array<{
+      row: number;
+      first_name?: string | null;
+      last_name?: string | null;
+      email?: string | null;
+      employee_code?: string | null;
+      department?: string | null;
+      designation?: string | null;
+      phone_number?: string | null;
+      work_mode?: string | null;
+      valid: boolean;
+      is_duplicate: boolean;
+      errors: string[];
+    }>;
+  } | null>(null);
+  const [importResult, setImportResult] = useState<{
+    total_rows: number;
+    created: number;
+    skipped: number;
+    created_records: Array<{
+      row: number;
+      employee_code: string;
+      first_name: string;
+      last_name: string;
+      email: string;
+    }>;
+    skipped_records: Array<{
+      row: number;
+      first_name: string;
+      last_name: string;
+      email: string;
+      reason: string;
+    }>;
+  } | null>(null);
 
   // Edit Employee Modal State
   const [showEditEmployeeModal, setShowEditEmployeeModal] = useState(false);
@@ -640,6 +717,105 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // 1a-2. CSV Import Flow Handlers
+  const handleDownloadImportTemplate = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/management/employees/import/template`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error("Failed to download CSV template");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "employee_import_template.csv";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      showToast(err.message || "Failed to download template", "error");
+    }
+  };
+
+  const handleImportFileSelect = (f: File) => {
+    if (!f.name.toLowerCase().endsWith(".csv")) {
+      setImportError("Please select a valid CSV file (.csv).");
+      return;
+    }
+    setImportFile(f);
+    setImportError("");
+  };
+
+  const handleImportPreviewSubmit = async () => {
+    if (!importFile) {
+      setImportError("Please select a CSV file first.");
+      return;
+    }
+    setImportLoading(true);
+    setImportError("");
+    try {
+      const fd = new FormData();
+      fd.append("csv", importFile);
+      const res = await fetch(`${API_BASE_URL}/management/employees/import/preview`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to analyze CSV file.");
+      }
+      setImportPreview(data);
+      setImportStep(2);
+    } catch (err: any) {
+      setImportError(err.message || "Preview failed. Please check your CSV.");
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const handleImportCommitSubmit = async () => {
+    if (!importFile) return;
+    setImportLoading(true);
+    setImportError("");
+    try {
+      const fd = new FormData();
+      fd.append("csv", importFile);
+      const res = await fetch(`${API_BASE_URL}/management/employees/import`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Import failed. Please try again.");
+      }
+      setImportResult(data);
+      setImportStep(3);
+      fetchEmployees();
+      fetchTenantStats();
+      showToast(`Import completed: ${data.created} created, ${data.skipped} skipped.`);
+    } catch (err: any) {
+      setImportError(err.message || "Import failed. Please try again.");
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const handleImportReset = () => {
+    setImportFile(null);
+    setImportPreview(null);
+    setImportResult(null);
+    setImportError("");
+    setImportStep(1);
+  };
+
+  const handleImportClose = () => {
+    setShowImportModal(false);
+    handleImportReset();
   };
 
   // 1b. Update Employee (Profile, Role, Office, Manager)
@@ -1035,170 +1211,917 @@ export default function Home() {
 
   if (!token) {
     return (
-      <div className={styles.container}>
-        <header className={styles.navbar}>
-          <div className={styles.brand}>
-            <div className={styles.brandIcon}>
-              <Image
-                src="/image.png"
-                alt="Face Attendance Logo"
-                width={40}
-                height={40}
-                className={styles.brandLogoImg}
-                priority
-              />
-            </div>
+      <div style={{ background: "#ffffff", minHeight: "100vh", color: "#0f172a", fontFamily: "system-ui, -apple-system, sans-serif" }}>
+        {/* Modern Clean Header */}
+        <header
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 50,
+            background: "rgba(255, 255, 255, 0.9)",
+            backdropFilter: "blur(12px)",
+            borderBottom: "1px solid #f1f5f9",
+            padding: "16px 36px",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            maxWidth: 1320,
+            margin: "0 auto",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <Image
+              src="/image.png"
+              alt="AttendFace AI Attendance System Logo"
+              width={38}
+              height={38}
+              style={{ borderRadius: 10, boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}
+              priority
+            />
             <div>
-              <div className={styles.brandTitle}>FaceVerify Enterprise</div>
-              <div className={styles.brandSubtitle}>Biometric Workforce Platform</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "#0f172a", letterSpacing: -0.3 }}>
+                AttendFace <span style={{ color: "#4f46e5" }}>AI</span>
+              </div>
+              <div style={{ fontSize: 11, color: "#64748b", fontWeight: 500 }}>
+                Enterprise Face Recognition & Geofencing
+              </div>
             </div>
           </div>
-        </header>
 
-        <div className={styles.authWrapper}>
-          <div className={styles.authCard}>
-            <div className={styles.authHeader}>
-              <div className={styles.authIconWrapper}>
-                <Image
-                  src="/image.png"
-                  alt="Face Attendance Logo"
-                  width={64}
-                  height={64}
-                  className={styles.brandLogoImg}
-                  priority
-                />
-              </div>
-              <h1 className={styles.authTitle}>
-                {authMode === "login" ? "Sign In to Organization" : "Create New Organization"}
-              </h1>
-              <p className={styles.authSubtitle}>
-                {authMode === "login"
-                  ? "Access the workforce management dashboard with your credentials."
-                  : "Set up a high-security multi-tenant organization with ArcFace biometrics."}
-              </p>
-            </div>
-
-            <div className={styles.authSwitcher}>
+          <nav style={{ display: "flex", alignItems: "center", gap: 28 }}>
+            <a href="#features" style={{ fontSize: 14, color: "#475569", textDecoration: "none", fontWeight: 500 }}>
+              Features
+            </a>
+            <a href="#technology" style={{ fontSize: 14, color: "#475569", textDecoration: "none", fontWeight: 500 }}>
+              AI Biometrics
+            </a>
+            <a href="#pricing" style={{ fontSize: 14, color: "#475569", textDecoration: "none", fontWeight: 500 }}>
+              Pricing
+            </a>
+            <Link href="/support" style={{ fontSize: 14, color: "#475569", textDecoration: "none", fontWeight: 500 }}>
+              Support
+            </Link>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginLeft: 8 }}>
               <button
-                type="button"
-                className={`${styles.switchBtn} ${authMode === "login" ? styles.switchBtnActive : ""}`}
-                onClick={() => setAuthMode("login")}
+                onClick={() => {
+                  setAuthMode("login");
+                  const el = document.getElementById("auth-form-card");
+                  el?.scrollIntoView({ behavior: "smooth" });
+                }}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  color: "#334155",
+                  cursor: "pointer",
+                  padding: "8px 14px",
+                }}
               >
                 Sign In
               </button>
               <button
-                type="button"
-                className={`${styles.switchBtn} ${authMode === "signup" ? styles.switchBtnActive : ""}`}
-                onClick={() => setAuthMode("signup")}
+                onClick={() => {
+                  setAuthMode("signup");
+                  const el = document.getElementById("auth-form-card");
+                  el?.scrollIntoView({ behavior: "smooth" });
+                }}
+                style={{
+                  background: "#0f172a",
+                  color: "#ffffff",
+                  border: "none",
+                  borderRadius: 24,
+                  padding: "10px 22px",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  boxShadow: "0 2px 8px rgba(15, 23, 42, 0.15)",
+                }}
               >
-                New Organization
+                Get Started Free
+              </button>
+            </div>
+          </nav>
+        </header>
+
+        {/* Hero Section Inspired by Reference Design */}
+        <section
+          style={{
+            maxWidth: 1320,
+            margin: "0 auto",
+            padding: "48px 24px 60px 24px",
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+            gap: 48,
+            alignItems: "center",
+          }}
+        >
+          {/* Left Column: Heading, Proof, CTA */}
+          <div>
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                background: "#fef3c7",
+                border: "1px solid #fde68a",
+                borderRadius: 20,
+                padding: "4px 14px",
+                marginBottom: 20,
+              }}
+            >
+              <span
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background: "#f59e0b",
+                }}
+              />
+              <span style={{ fontSize: 12, fontWeight: 700, color: "#b45309", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                AI-Powered Biometric Attendance
+              </span>
+            </div>
+
+            <h1
+              style={{
+                fontSize: 48,
+                fontWeight: 900,
+                color: "#0f172a",
+                lineHeight: 1.15,
+                letterSpacing: -1,
+                marginBottom: 20,
+              }}
+            >
+              AI Biometric Face Recognition System for Modern Workforces
+            </h1>
+
+            <p style={{ fontSize: 17, color: "#475569", lineHeight: 1.6, marginBottom: 28, maxWidth: 540 }}>
+              Eliminate buddy punching and time theft with real-time 512D deep facial landmark verification, anti-spoofing liveness checks, and OpenStreetMap campus geofencing. 14-day free trial, then only $2/employee/month.
+            </p>
+
+            {/* Quick Action CTAs */}
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", marginBottom: 36 }}>
+              <button
+                onClick={() => {
+                  setAuthMode("signup");
+                  const el = document.getElementById("auth-form-card");
+                  el?.scrollIntoView({ behavior: "smooth" });
+                }}
+                style={{
+                  background: "#0f172a",
+                  color: "#ffffff",
+                  border: "none",
+                  borderRadius: 28,
+                  padding: "14px 28px",
+                  fontSize: 15,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  boxShadow: "0 4px 14px rgba(15, 23, 42, 0.2)",
+                }}
+              >
+                <span>Start 14-Day Free Trial</span>
+                <span style={{ fontSize: 18 }}>→</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  const el = document.getElementById("features");
+                  el?.scrollIntoView({ behavior: "smooth" });
+                }}
+                style={{
+                  background: "#ffffff",
+                  color: "#334155",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 28,
+                  padding: "13px 24px",
+                  fontSize: 15,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Explore Architecture
               </button>
             </div>
 
-            {authMode === "login" ? (
-              <form onSubmit={handleLogin}>
-                <div className={styles.formGroup}>
-                  <label className={styles.label}>Work Email Address</label>
-                  <input
-                    type="email"
-                    required
-                    className={styles.input}
-                    placeholder="admin@company.com"
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                  />
+            {/* Social Proof & Customer Satisfaction Badge */}
+            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+              <div style={{ display: "flex", marginLeft: 4 }}>
+                {["#4f46e5", "#06b6d4", "#10b981", "#f59e0b"].map((bg, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: "50%",
+                      background: bg,
+                      border: "2px solid #ffffff",
+                      marginLeft: idx === 0 ? 0 : -10,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: "#ffffff",
+                      fontSize: 11,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {String.fromCharCode(65 + idx)}
+                  </div>
+                ))}
+              </div>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ color: "#f59e0b", fontSize: 14 }}>★★★★★</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>4.9/5 Rating</span>
                 </div>
-                <div className={styles.formGroup}>
-                  <label className={styles.label}>Password</label>
-                  <input
-                    type="password"
-                    required
-                    className={styles.input}
-                    placeholder="Enter account password"
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                  />
+                <div style={{ fontSize: 12, color: "#64748b" }}>
+                  Trusted by 10,000+ employees and verified teams
                 </div>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className={styles.btnPrimary}
-                  style={{ width: "100%", marginTop: 8 }}
-                >
-                  <ShieldIcon size={16} />
-                  <span>{loading ? "Authenticating..." : "Sign In to Dashboard"}</span>
-                </button>
-              </form>
-            ) : (
-              <form onSubmit={handleSignupTenant}>
-                <div className={styles.formGroup}>
-                  <label className={styles.label}>Company / Organization Name</label>
-                  <input
-                    type="text"
-                    required
-                    className={styles.input}
-                    placeholder="e.g. Acme Corporation"
-                    value={companyName}
-                    onChange={(e) => setCompanyName(e.target.value)}
-                  />
-                </div>
-                <div className={styles.formGroup}>
-                  <label className={styles.label}>Primary Office Campus Name</label>
-                  <input
-                    type="text"
-                    required
-                    className={styles.input}
-                    placeholder="e.g. Headquarters Campus (200m Geofence)"
-                    value={officeName}
-                    onChange={(e) => setOfficeName(e.target.value)}
-                  />
-                </div>
-                <div className={styles.formGroup}>
-                  <label className={styles.label}>Administrator Full Name</label>
-                  <input
-                    type="text"
-                    required
-                    className={styles.input}
-                    placeholder="John Doe"
-                    value={adminName}
-                    onChange={(e) => setAdminName(e.target.value)}
-                  />
-                </div>
-                <div className={styles.formGroup}>
-                  <label className={styles.label}>Administrator Email</label>
-                  <input
-                    type="email"
-                    required
-                    className={styles.input}
-                    placeholder="admin@acme.com"
-                    value={adminEmail}
-                    onChange={(e) => setAdminEmail(e.target.value)}
-                  />
-                </div>
-                <div className={styles.formGroup}>
-                  <label className={styles.label}>Account Password</label>
-                  <input
-                    type="password"
-                    required
-                    className={styles.input}
-                    placeholder="Minimum 8 characters"
-                    value={adminPassword}
-                    onChange={(e) => setAdminPassword(e.target.value)}
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className={styles.btnPrimary}
-                  style={{ width: "100%", marginTop: 8 }}
-                >
-                  <BuildingIcon size={16} />
-                  <span>{loading ? "Initializing..." : "Create Organization Workspace"}</span>
-                </button>
-              </form>
-            )}
+              </div>
+            </div>
           </div>
-        </div>
+
+          {/* Right Column: Hero Visual with Holographic Biometrics & Live Stats */}
+          <div style={{ position: "relative", display: "flex", justifyContent: "center" }}>
+            <div
+              style={{
+                position: "relative",
+                borderRadius: 28,
+                overflow: "hidden",
+                border: "1px solid #e2e8f0",
+                boxShadow: "0 20px 50px -10px rgba(0, 0, 0, 0.08)",
+                background: "#f8fafc",
+                maxWidth: 480,
+                width: "100%",
+              }}
+            >
+              <Image
+                src="/hero-face.jpg"
+                alt="AI Facial Recognition Biometric Scanning Neural Net"
+                width={480}
+                height={480}
+                style={{ width: "100%", height: "auto", display: "block" }}
+                priority
+              />
+
+              {/* Floating Top Floating Card */}
+              <div
+                style={{
+                  position: "absolute",
+                  top: 20,
+                  right: 20,
+                  background: "rgba(255, 255, 255, 0.95)",
+                  backdropFilter: "blur(10px)",
+                  border: "1px solid rgba(226, 232, 240, 0.8)",
+                  borderRadius: 14,
+                  padding: "12px 18px",
+                  boxShadow: "0 8px 24px rgba(0, 0, 0, 0.08)",
+                  maxWidth: 240,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <div
+                    style={{
+                      width: 24,
+                      height: 24,
+                      borderRadius: 6,
+                      background: "#0f172a",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <ShieldIcon size={13} color="#ffffff" />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#0f172a" }}>AI Agent Active</div>
+                    <div style={{ fontSize: 9, color: "#10b981", fontWeight: 600 }}>Biometrics Verified in Real-Time</div>
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.4 }}>
+                  • 512D Landmark Embedding<br />
+                  • Anti-Spoofing Liveness Passed<br />
+                  • 200m Campus Geofence Matched
+                </div>
+              </div>
+
+              {/* Floating Bottom Metric Card */}
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: 20,
+                  left: 20,
+                  background: "rgba(255, 255, 255, 0.95)",
+                  backdropFilter: "blur(10px)",
+                  border: "1px solid rgba(226, 232, 240, 0.8)",
+                  borderRadius: 14,
+                  padding: "14px 20px",
+                  boxShadow: "0 8px 24px rgba(0, 0, 0, 0.08)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 16,
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Verification Accuracy</div>
+                  <div style={{ fontSize: 24, fontWeight: 900, color: "#0f172a" }}>99.8%</div>
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: "#059669",
+                    background: "#ecfdf5",
+                    padding: "4px 8px",
+                    borderRadius: 6,
+                  }}
+                >
+                  ↑ 0.18s Match Speed
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Client Logos / Enterprise Integration Bar */}
+        <section
+          style={{
+            borderTop: "1px solid #f1f5f9",
+            borderBottom: "1px solid #f1f5f9",
+            background: "#f8fafc",
+            padding: "24px",
+            textAlign: "center",
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, color: "#94a3b8", marginBottom: 14 }}>
+            TRUSTED BY FORWARD-THINKING ORGANIZATIONS & HYBRID WORKFORCES
+          </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              gap: 40,
+              flexWrap: "wrap",
+              opacity: 0.7,
+              fontSize: 14,
+              fontWeight: 700,
+              color: "#475569",
+            }}
+          >
+            <span>Microsoft Azure</span>
+            <span>AWS Cloud</span>
+            <span>Google Cloud Platform</span>
+            <span>Stripe Billing</span>
+            <span>OpenStreetMap</span>
+            <span>Vercel Analytics</span>
+          </div>
+        </section>
+
+        {/* Interactive Sign In / Organization Registration Card */}
+        <section
+          id="auth-form-card"
+          style={{
+            maxWidth: 1120,
+            margin: "64px auto",
+            padding: "0 24px",
+          }}
+        >
+          <div
+            style={{
+              background: "#ffffff",
+              border: "1px solid #e2e8f0",
+              borderRadius: 20,
+              boxShadow: "0 10px 40px -10px rgba(0, 0, 0, 0.06)",
+              overflow: "hidden",
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
+            }}
+          >
+            {/* Left Column: Form Container */}
+            <div style={{ padding: "40px 36px" }}>
+              <div style={{ marginBottom: 24 }}>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.5,
+                    color: "#4f46e5",
+                    background: "#eef2ff",
+                    padding: "3px 10px",
+                    borderRadius: 12,
+                  }}
+                >
+                  Workspace Access
+                </span>
+                <h2 style={{ fontSize: 24, fontWeight: 800, color: "#0f172a", marginTop: 8 }}>
+                  {authMode === "login" ? "Sign In to Your Workspace" : "Launch Organization Workspace"}
+                </h2>
+                <p style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
+                  {authMode === "login"
+                    ? "Enter your credentials to manage attendance, employees, and timesheets."
+                    : "Instant setup with full 14-day free enterprise access. No credit card required to start."}
+                </p>
+              </div>
+
+              {/* Mode Switcher */}
+              <div
+                style={{
+                  display: "flex",
+                  background: "#f1f5f9",
+                  borderRadius: 10,
+                  padding: 4,
+                  marginBottom: 20,
+                }}
+              >
+                <button
+                  type="button"
+                  style={{
+                    flex: 1,
+                    padding: "8px 12px",
+                    border: "none",
+                    borderRadius: 8,
+                    background: authMode === "login" ? "#ffffff" : "transparent",
+                    color: authMode === "login" ? "#0f172a" : "#64748b",
+                    fontWeight: 600,
+                    fontSize: 13,
+                    cursor: "pointer",
+                    boxShadow: authMode === "login" ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
+                  }}
+                  onClick={() => setAuthMode("login")}
+                >
+                  Sign In
+                </button>
+                <button
+                  type="button"
+                  style={{
+                    flex: 1,
+                    padding: "8px 12px",
+                    border: "none",
+                    borderRadius: 8,
+                    background: authMode === "signup" ? "#ffffff" : "transparent",
+                    color: authMode === "signup" ? "#0f172a" : "#64748b",
+                    fontWeight: 600,
+                    fontSize: 13,
+                    cursor: "pointer",
+                    boxShadow: authMode === "signup" ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
+                  }}
+                  onClick={() => setAuthMode("signup")}
+                >
+                  New Organization (14-Day Free Trial)
+                </button>
+              </div>
+
+              {authMode === "login" ? (
+                <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div>
+                    <label style={{ fontSize: 13, fontWeight: 600, color: "#334155", display: "block", marginBottom: 6 }}>
+                      Work Email Address
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="admin@company.com"
+                      value={loginEmail}
+                      onChange={(e) => setLoginEmail(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "10px 14px",
+                        borderRadius: 8,
+                        border: "1px solid #cbd5e1",
+                        fontSize: 14,
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 13, fontWeight: 600, color: "#334155", display: "block", marginBottom: 6 }}>
+                      Password
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="••••••••"
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "10px 14px",
+                        borderRadius: 8,
+                        border: "1px solid #cbd5e1",
+                        fontSize: 14,
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    style={{
+                      background: "#0f172a",
+                      color: "#ffffff",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "12px",
+                      fontWeight: 700,
+                      fontSize: 14,
+                      cursor: "pointer",
+                      marginTop: 6,
+                    }}
+                  >
+                    {loading ? "Authenticating..." : "Sign In to Dashboard"}
+                  </button>
+                </form>
+              ) : (
+                <form onSubmit={handleSignupTenant} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div>
+                    <label style={{ fontSize: 13, fontWeight: 600, color: "#334155", display: "block", marginBottom: 6 }}>
+                      Organization / Company Name
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Acme Corporation"
+                      value={companyName}
+                      onChange={(e) => setCompanyName(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "10px 14px",
+                        borderRadius: 8,
+                        border: "1px solid #cbd5e1",
+                        fontSize: 14,
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 13, fontWeight: 600, color: "#334155", display: "block", marginBottom: 6 }}>
+                      Primary Campus / Office Name
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Headquarters (200m Geofence)"
+                      value={officeName}
+                      onChange={(e) => setOfficeName(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "10px 14px",
+                        borderRadius: 8,
+                        border: "1px solid #cbd5e1",
+                        fontSize: 14,
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 13, fontWeight: 600, color: "#334155", display: "block", marginBottom: 6 }}>
+                      Administrator Full Name
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="John Doe"
+                      value={adminName}
+                      onChange={(e) => setAdminName(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "10px 14px",
+                        borderRadius: 8,
+                        border: "1px solid #cbd5e1",
+                        fontSize: 14,
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 13, fontWeight: 600, color: "#334155", display: "block", marginBottom: 6 }}>
+                      Administrator Email
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="admin@acme.com"
+                      value={adminEmail}
+                      onChange={(e) => setAdminEmail(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "10px 14px",
+                        borderRadius: 8,
+                        border: "1px solid #cbd5e1",
+                        fontSize: 14,
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 13, fontWeight: 600, color: "#334155", display: "block", marginBottom: 6 }}>
+                      Account Password
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="Minimum 8 characters"
+                      value={adminPassword}
+                      onChange={(e) => setAdminPassword(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "10px 14px",
+                        borderRadius: 8,
+                        border: "1px solid #cbd5e1",
+                        fontSize: 14,
+                        outline: "none",
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    style={{
+                      background: "#0f172a",
+                      color: "#ffffff",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "12px",
+                      fontWeight: 700,
+                      fontSize: 14,
+                      cursor: "pointer",
+                      marginTop: 6,
+                    }}
+                  >
+                    {loading ? "Initializing..." : "Create Organization (14 Days Free)"}
+                  </button>
+                </form>
+              )}
+            </div>
+
+            {/* Right Column: Promotional Highlights */}
+            <div
+              style={{
+                background: "#f8fafc",
+                borderLeft: "1px solid #e2e8f0",
+                padding: "40px 36px",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "space-between",
+              }}
+            >
+              <div>
+                <h3 style={{ fontSize: 18, fontWeight: 800, color: "#0f172a", marginBottom: 12 }}>
+                  Why Global Teams Choose AttendFace
+                </h3>
+                <p style={{ fontSize: 13, color: "#64748b", lineHeight: 1.6, marginBottom: 20 }}>
+                  A turnkey biometric attendance solution that saves companies an average of 4.5% on payroll by preventing time theft.
+                </p>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                    <div style={{ color: "#10b981", marginTop: 2 }}>✓</div>
+                    <div style={{ fontSize: 13, color: "#334155" }}>
+                      <strong>Touchless Facial Scan:</strong> Verify punch clocks on web & mobile in under 0.2 seconds.
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                    <div style={{ color: "#10b981", marginTop: 2 }}>✓</div>
+                    <div style={{ fontSize: 13, color: "#334155" }}>
+                      <strong>Interactive OpenStreetMap Geofences:</strong> Pinpoint exact campus coordinates and customize radiuses.
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                    <div style={{ color: "#10b981", marginTop: 2 }}>✓</div>
+                    <div style={{ fontSize: 13, color: "#334155" }}>
+                      <strong>Predictable SaaS Pricing:</strong> 14-day free trial, then strictly $2.00/user/month with auto-proration.
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                    <div style={{ color: "#10b981", marginTop: 2 }}>✓</div>
+                    <div style={{ fontSize: 13, color: "#334155" }}>
+                      <strong>Multi-Level Leave Approvals:</strong> Manager review, HR verification, and executive Admin bypass.
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  background: "#ffffff",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 12,
+                  padding: 16,
+                  marginTop: 24,
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>Need custom enterprise billing?</div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                  Contact our solutions team for on-premise deployments or custom API SLAs.
+                </div>
+                <Link href="/support" style={{ fontSize: 12, color: "#4f46e5", fontWeight: 600, textDecoration: "none", display: "inline-block", marginTop: 6 }}>
+                  Contact Support →
+                </Link>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Feature Grid Section (SEO-rich keywords) */}
+        <section id="features" style={{ maxWidth: 1200, margin: "60px auto", padding: "0 24px" }}>
+          <div style={{ textAlign: "center", maxWidth: 640, margin: "0 auto 48px auto" }}>
+            <span style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: "#4f46e5" }}>
+              Workforce Intelligence
+            </span>
+            <h2 style={{ fontSize: 32, fontWeight: 800, color: "#0f172a", marginTop: 8 }}>
+              Engineered for Accuracy, Scalability, and Speed
+            </h2>
+            <p style={{ fontSize: 15, color: "#64748b", marginTop: 6 }}>
+              Comprehensive biometric face recognition attendance management tailored for offices, factories, schools, and remote teams.
+            </p>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 24 }}>
+            <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "28px" }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: "#eef2ff", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
+                <ShieldIcon size={20} color="#4f46e5" />
+              </div>
+              <h3 style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", marginBottom: 8 }}>
+                512D Deep Biometric Embeddings
+              </h3>
+              <p style={{ fontSize: 13, color: "#64748b", lineHeight: 1.6 }}>
+                Our neural network extracts 512-dimensional vector representations of facial geometry, guaranteeing 99.8% match confidence even with glasses or lighting shifts.
+              </p>
+            </div>
+
+            <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "28px" }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: "#ecfdf5", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
+                <CheckCircleIcon size={20} color="#059669" />
+              </div>
+              <h3 style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", marginBottom: 8 }}>
+                Anti-Spoofing Liveness Detection
+              </h3>
+              <p style={{ fontSize: 13, color: "#64748b", lineHeight: 1.6 }}>
+                Advanced micro-texture and depth analysis rejects photographs, printed headshots, and video screen replays to prevent attendance fraud.
+              </p>
+            </div>
+
+            <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "28px" }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: "#eff6ff", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
+                <LocationPinIcon size={20} color="#0284c7" />
+              </div>
+              <h3 style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", marginBottom: 8 }}>
+                OpenStreetMap Campus Geofencing
+              </h3>
+              <p style={{ fontSize: 13, color: "#64748b", lineHeight: 1.6 }}>
+                Interactive map pinpointing and custom-radius validation ensure on-site employees are physically present within authorized office perimeters.
+              </p>
+            </div>
+
+            <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 14, padding: "28px" }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: "#fef3c7", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
+                <CalendarIcon size={20} color="#d97706" />
+              </div>
+              <h3 style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", marginBottom: 8 }}>
+                Tiered Leave & Regularization
+              </h3>
+              <p style={{ fontSize: 13, color: "#64748b", lineHeight: 1.6 }}>
+                Hierarchical manager reviews, HR approvals, and executive Admin direct bypass ensure swift resolution for missed punches and time-off requests.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* Pricing Section */}
+        <section id="pricing" style={{ background: "#f8fafc", borderTop: "1px solid #e2e8f0", borderBottom: "1px solid #e2e8f0", padding: "64px 24px" }}>
+          <div style={{ maxWidth: 1000, margin: "0 auto", textAlign: "center" }}>
+            <span style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: "#4f46e5" }}>
+              Transparent SaaS Pricing
+            </span>
+            <h2 style={{ fontSize: 32, fontWeight: 800, color: "#0f172a", marginTop: 8 }}>
+              Simple, Transparent, Seat-Based Pricing
+            </h2>
+            <p style={{ fontSize: 15, color: "#64748b", marginTop: 6, marginBottom: 36 }}>
+              No upfront setup fees. No long-term lock-in contracts. Cancel anytime via the self-service Stripe Customer Portal.
+            </p>
+
+            <div
+              style={{
+                maxWidth: 480,
+                margin: "0 auto",
+                background: "#ffffff",
+                border: "2px solid #4f46e5",
+                borderRadius: 20,
+                padding: "36px",
+                boxShadow: "0 12px 30px rgba(79, 70, 229, 0.08)",
+                textAlign: "left",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: "#0f172a" }}>Enterprise Plan</span>
+                <span style={{ background: "#ecfdf5", color: "#059669", fontSize: 12, fontWeight: 700, padding: "4px 10px", borderRadius: 12 }}>
+                  14 Days Free Trial
+                </span>
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 16 }}>
+                <span style={{ fontSize: 44, fontWeight: 900, color: "#0f172a" }}>$2.00</span>
+                <span style={{ fontSize: 15, color: "#64748b", fontWeight: 500 }}>USD / employee / month</span>
+              </div>
+              <p style={{ fontSize: 13, color: "#64748b", lineHeight: 1.5, marginBottom: 24 }}>
+                Everything included with unlimited punch scans, multiple campus geofences, and automated SES dispatch.
+              </p>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 28, fontSize: 13, color: "#334155" }}>
+                <div>✓ 14 days complimentary trial ($0.00 today)</div>
+                <div>✓ Automatic seat proration via Stripe</div>
+                <div>✓ Unlimited biometric check-ins & check-outs</div>
+                <div>✓ OpenStreetMap campus geofences</div>
+                <div>✓ Instant CSV timesheet export</div>
+                <div>✓ 24/7 dedicated customer support</div>
+              </div>
+
+              <button
+                onClick={() => {
+                  setAuthMode("signup");
+                  const el = document.getElementById("auth-form-card");
+                  el?.scrollIntoView({ behavior: "smooth" });
+                }}
+                style={{
+                  width: "100%",
+                  background: "#4f46e5",
+                  color: "#ffffff",
+                  border: "none",
+                  borderRadius: 10,
+                  padding: "14px",
+                  fontSize: 15,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                Start 14-Day Free Trial
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* SEO Information & Footer */}
+        <footer style={{ background: "#ffffff", borderTop: "1px solid #f1f5f9", padding: "48px 36px 36px 36px", maxWidth: 1320, margin: "0 auto" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 36, marginBottom: 36 }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                <Image src="/image.png" alt="AttendFace Logo" width={28} height={28} style={{ borderRadius: 6 }} />
+                <span style={{ fontWeight: 800, fontSize: 16, color: "#0f172a" }}>AttendFace AI</span>
+              </div>
+              <p style={{ fontSize: 13, color: "#64748b", lineHeight: 1.5 }}>
+                Next-generation biometric face recognition attendance platform for modern enterprises, campuses, and distributed teams.
+              </p>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 12, textTransform: "uppercase" }}>
+                Product & Tech
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 13, color: "#64748b" }}>
+                <a href="#features" style={{ color: "inherit", textDecoration: "none" }}>Biometric Scanner</a>
+                <a href="#features" style={{ color: "inherit", textDecoration: "none" }}>Campus Geofencing</a>
+                <a href="#pricing" style={{ color: "inherit", textDecoration: "none" }}>Workforce Pricing</a>
+                <Link href="/support" style={{ color: "inherit", textDecoration: "none" }}>Support Portal</Link>
+              </div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 12, textTransform: "uppercase" }}>
+                Legal & Security
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 13, color: "#64748b" }}>
+                <Link href="/privacy" style={{ color: "inherit", textDecoration: "none" }}>Privacy Policy</Link>
+                <Link href="/terms" style={{ color: "inherit", textDecoration: "none" }}>Terms of Service</Link>
+                <Link href="/privacy" style={{ color: "inherit", textDecoration: "none" }}>Biometric Data Retention</Link>
+                <Link href="/support" style={{ color: "inherit", textDecoration: "none" }}>Data Protection Officer</Link>
+              </div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 12, textTransform: "uppercase" }}>
+                Developed By
+              </div>
+              <div style={{ fontSize: 13, color: "#64748b", lineHeight: 1.5 }}>
+                <strong>Alpha Software Development Limited</strong><br />
+                Registered in England & Wales<br />
+                Contact: <a href="mailto:support@alpha-devs.cloud" style={{ color: "#4f46e5" }}>support@alpha-devs.cloud</a>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ borderTop: "1px solid #f1f5f9", paddingTop: 24, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, fontSize: 12, color: "#94a3b8" }}>
+            <div>© 2026 AttendFace • Alpha Software Development Limited. All rights reserved.</div>
+            <div style={{ display: "flex", gap: 18 }}>
+              <Link href="/privacy" style={{ color: "inherit", textDecoration: "none" }}>Privacy</Link>
+              <Link href="/terms" style={{ color: "inherit", textDecoration: "none" }}>Terms</Link>
+              <Link href="/support" style={{ color: "inherit", textDecoration: "none" }}>Support</Link>
+            </div>
+          </div>
+        </footer>
 
         {toastMessage && (
           <div
@@ -1431,16 +2354,29 @@ export default function Home() {
 
           <div style={{ display: "flex", gap: 10 }}>
             {activeTab === "employees" && (
-              <button
-                className={styles.btnPrimary}
-                onClick={() => {
-                  setCreatedEmployeeResult(null);
-                  setShowAddEmployeeModal(true);
-                }}
-              >
-                <UserPlusIcon size={16} />
-                <span>Add Employee</span>
-              </button>
+              <>
+                <button
+                  className={styles.btnSecondary}
+                  onClick={() => {
+                    handleImportReset();
+                    setShowImportModal(true);
+                  }}
+                  title="Import workforce roster via CSV"
+                >
+                  <UploadCloudIcon size={16} />
+                  <span>Import CSV</span>
+                </button>
+                <button
+                  className={styles.btnPrimary}
+                  onClick={() => {
+                    setCreatedEmployeeResult(null);
+                    setShowAddEmployeeModal(true);
+                  }}
+                >
+                  <UserPlusIcon size={16} />
+                  <span>Add Employee</span>
+                </button>
+              </>
             )}
 
             {activeTab === "leaves" && (
@@ -3072,6 +4008,617 @@ export default function Home() {
                   </button>
                 </div>
               </form>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 1A: IMPORT EMPLOYEES VIA CSV (3-STEP WIZARD)                       */}
+      {/* ========================================================================= */}
+      {showImportModal && (
+        <div className={styles.modalBackdrop}>
+          <div
+            className={styles.modalCard}
+            style={{
+              maxWidth: importStep === 2 ? 980 : 640,
+              width: "100%",
+              transition: "max-width 0.25s cubic-bezier(0.16, 1, 0.3, 1)",
+            }}
+          >
+            {/* Modal Header */}
+            <div className={styles.modalHeader}>
+              <div className={styles.modalTitle}>
+                <UploadCloudIcon size={20} color="#0284c7" />
+                <span>Import Employees via CSV</span>
+              </div>
+              <button className={styles.modalClose} onClick={handleImportClose}>
+                <CloseIcon size={18} />
+              </button>
+            </div>
+
+            {/* Step Wizard Indicator */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "16px 24px",
+                background: "#f8fafc",
+                borderBottom: "1px solid #e2e8f0",
+                gap: 8,
+              }}
+            >
+              {[
+                { n: 1 as const, label: "1. Upload File" },
+                { n: 2 as const, label: "2. Verify & Preview" },
+                { n: 3 as const, label: "3. Import Result" },
+              ].map((step, idx) => {
+                const isActive = importStep === step.n;
+                const isDone = importStep > step.n;
+                return (
+                  <React.Fragment key={step.n}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div
+                        style={{
+                          width: 26,
+                          height: 26,
+                          borderRadius: "50%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: 12,
+                          fontWeight: 700,
+                          background: isDone ? "#10b981" : isActive ? "#0284c7" : "#e2e8f0",
+                          color: isDone || isActive ? "#ffffff" : "#64748b",
+                          transition: "all 0.2s ease",
+                        }}
+                      >
+                        {isDone ? <CheckCircleIcon size={14} color="#ffffff" /> : step.n}
+                      </div>
+                      <span
+                        style={{
+                          fontSize: 12,
+                          fontWeight: isActive ? 700 : 500,
+                          color: isActive ? "#0f172a" : isDone ? "#059669" : "#64748b",
+                        }}
+                      >
+                        {step.label}
+                      </span>
+                    </div>
+                    {idx < 2 && (
+                      <div
+                        style={{
+                          width: 36,
+                          height: 2,
+                          background: isDone ? "#10b981" : "#e2e8f0",
+                          margin: "0 4px",
+                        }}
+                      />
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+
+            {/* STEP 1: UPLOAD CSV FILE */}
+            {importStep === 1 && (
+              <div className={styles.modalBody} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                <div>
+                  <h3 style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", margin: 0 }}>
+                    Select or Drop Workforce CSV
+                  </h3>
+                  <p style={{ fontSize: 12, color: "#64748b", margin: "4px 0 0" }}>
+                    Your CSV must include: First Name, Last Name, Email, Employee Code. Department, Designation, Phone Number, and Work Mode are optional.
+                  </p>
+                </div>
+
+                {/* Template Download Banner */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    padding: "12px 16px",
+                    background: "#f0f9ff",
+                    border: "1px solid #bae6fd",
+                    borderRadius: 10,
+                  }}
+                >
+                  <FileTextIcon size={18} color="#0284c7" />
+                  <div style={{ fontSize: 12, color: "#0369a1", flex: 1 }}>
+                    Need the formatted template?{" "}
+                    <button
+                      type="button"
+                      onClick={handleDownloadImportTemplate}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "#0284c7",
+                        fontWeight: 700,
+                        textDecoration: "underline",
+                        cursor: "pointer",
+                        padding: 0,
+                      }}
+                    >
+                      Download CSV Template
+                    </button>
+                  </div>
+                </div>
+
+                {/* Drag and Drop Box */}
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setImportDragging(true);
+                  }}
+                  onDragLeave={() => setImportDragging(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setImportDragging(false);
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) handleImportFileSelect(file);
+                  }}
+                  onClick={() => {
+                    const input = document.getElementById("csv_file_input") as HTMLInputElement;
+                    if (input) input.click();
+                  }}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 10,
+                    padding: "36px 20px",
+                    border: `2px dashed ${importDragging ? "#0284c7" : importFile ? "#10b981" : "#cbd5e1"}`,
+                    background: importDragging ? "#f0f9ff" : importFile ? "#f0fdf4" : "#f8fafc",
+                    borderRadius: 12,
+                    cursor: "pointer",
+                    transition: "all 0.2s ease",
+                  }}
+                >
+                  <input
+                    id="csv_file_input"
+                    type="file"
+                    accept=".csv,text/csv"
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleImportFileSelect(file);
+                    }}
+                  />
+                  {importFile ? (
+                    <>
+                      <CheckCircleIcon size={32} color="#10b981" />
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{importFile.name}</div>
+                        <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+                          {(importFile.size / 1024).toFixed(1)} KB • Click to replace file
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <UploadCloudIcon size={32} color="#94a3b8" />
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: "#1e293b" }}>
+                          Drop your CSV file here
+                        </div>
+                        <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+                          or click to browse your computer
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Error Banner */}
+                {importError && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "10px 14px",
+                      background: "#fef2f2",
+                      border: "1px solid #fecaca",
+                      borderRadius: 8,
+                      color: "#dc2626",
+                      fontSize: 12,
+                    }}
+                  >
+                    <XCircleIcon size={16} color="#dc2626" />
+                    <span>{importError}</span>
+                  </div>
+                )}
+
+                {/* Footer Action */}
+                <div className={styles.modalFooter} style={{ padding: "16px 0 0", margin: 0, background: "transparent", borderTop: "none" }}>
+                  <button type="button" className={styles.btnSecondary} onClick={handleImportClose}>
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.btnPrimary}
+                    onClick={handleImportPreviewSubmit}
+                    disabled={!importFile || importLoading}
+                  >
+                    <CheckCircleIcon size={16} />
+                    <span>{importLoading ? "Analyzing CSV..." : "Preview Import"}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 2: PREVIEW & VERIFICATION TABLE */}
+            {importStep === 2 && importPreview && (
+              <div className={styles.modalBody} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                {/* Metric Summary Badges */}
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      background: "#f0fdf4",
+                      border: "1px solid #bbf7d0",
+                      padding: "6px 14px",
+                      borderRadius: 8,
+                    }}
+                  >
+                    <CheckCircleIcon size={15} color="#16a34a" />
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#166534" }}>
+                      {importPreview.valid_rows} Valid
+                    </span>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      background: "#fef2f2",
+                      border: "1px solid #fecaca",
+                      padding: "6px 14px",
+                      borderRadius: 8,
+                    }}
+                  >
+                    <XCircleIcon size={15} color="#dc2626" />
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#991b1b" }}>
+                      {importPreview.invalid_rows} Invalid
+                    </span>
+                  </div>
+
+                  {(() => {
+                    const dupCount = importPreview.preview.filter((r) => r.is_duplicate).length;
+                    return dupCount > 0 ? (
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          background: "#fffbeb",
+                          border: "1px solid #fde68a",
+                          padding: "6px 14px",
+                          borderRadius: 8,
+                        }}
+                      >
+                        <AlertTriangleIcon size={15} color="#d97706" />
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#92400e" }}>
+                          {dupCount} Duplicate{dupCount !== 1 ? "s" : ""}
+                        </span>
+                      </div>
+                    ) : null;
+                  })()}
+
+                  <div style={{ marginLeft: "auto", fontSize: 12, color: "#64748b" }}>
+                    {importPreview.total_rows} total rows in CSV
+                  </div>
+                </div>
+
+                {/* Error Banner */}
+                {importError && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "10px 14px",
+                      background: "#fef2f2",
+                      border: "1px solid #fecaca",
+                      borderRadius: 8,
+                      color: "#dc2626",
+                      fontSize: 12,
+                    }}
+                  >
+                    <XCircleIcon size={16} color="#dc2626" />
+                    <span>{importError}</span>
+                  </div>
+                )}
+
+                {/* Row-by-Row Preview Table */}
+                <div
+                  style={{
+                    border: "1px solid #e2e8f0",
+                    borderRadius: 10,
+                    overflow: "hidden",
+                    maxHeight: 380,
+                    overflowY: "auto",
+                    overflowX: "auto",
+                  }}
+                >
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ background: "#f8fafc", textAlign: "left", borderBottom: "1px solid #e2e8f0" }}>
+                        <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600, width: 44 }}>Row</th>
+                        <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600 }}>First Name</th>
+                        <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600 }}>Last Name</th>
+                        <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600 }}>Email</th>
+                        <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600 }}>Code</th>
+                        <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600 }}>Department</th>
+                        <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600 }}>Designation</th>
+                        <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600 }}>Mode</th>
+                        <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600 }}>Duplicate?</th>
+                        <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600 }}>Validation Errors</th>
+                        <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600, textAlign: "center", width: 50 }}>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importPreview.preview.map((row) => (
+                        <tr
+                          key={row.row}
+                          style={{
+                            borderBottom: "1px solid #f1f5f9",
+                            background: !row.valid
+                              ? "rgba(254, 242, 242, 0.5)"
+                              : row.is_duplicate
+                              ? "rgba(255, 251, 235, 0.5)"
+                              : "#ffffff",
+                          }}
+                        >
+                          <td style={{ padding: "8px 12px", fontFamily: "monospace", color: "#64748b" }}>{row.row}</td>
+                          <td style={{ padding: "8px 12px", fontWeight: 600, color: "#0f172a" }}>
+                            {row.first_name || <span style={{ color: "#94a3b8", fontStyle: "italic" }}>—</span>}
+                          </td>
+                          <td style={{ padding: "8px 12px", fontWeight: 600, color: "#0f172a" }}>
+                            {row.last_name || <span style={{ color: "#94a3b8", fontStyle: "italic" }}>—</span>}
+                          </td>
+                          <td style={{ padding: "8px 12px", color: "#334155" }}>
+                            {row.email || <span style={{ color: "#94a3b8", fontStyle: "italic" }}>—</span>}
+                          </td>
+                          <td style={{ padding: "8px 12px", fontFamily: "monospace", color: "#0284c7" }}>
+                            {row.employee_code || <span style={{ color: "#94a3b8", fontStyle: "italic" }}>—</span>}
+                          </td>
+                          <td style={{ padding: "8px 12px", color: "#475569" }}>
+                            {row.department || "General"}
+                          </td>
+                          <td style={{ padding: "8px 12px", color: "#475569" }}>
+                            {row.designation || "Team Member"}
+                          </td>
+                          <td style={{ padding: "8px 12px" }}>
+                            <span
+                              style={{
+                                padding: "2px 8px",
+                                borderRadius: 12,
+                                fontSize: 11,
+                                fontWeight: 600,
+                                background: row.work_mode === "remote" ? "#ede9fe" : "#e0f2fe",
+                                color: row.work_mode === "remote" ? "#6d28d9" : "#0369a1",
+                              }}
+                            >
+                              {row.work_mode === "remote" ? "Remote" : "On-Site"}
+                            </span>
+                          </td>
+                          <td style={{ padding: "8px 12px" }}>
+                            {row.is_duplicate ? (
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "#d97706", fontWeight: 600, fontSize: 11 }}>
+                                <AlertTriangleIcon size={12} color="#d97706" /> Yes
+                              </span>
+                            ) : (
+                              <span style={{ color: "#94a3b8" }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ padding: "8px 12px", maxWidth: 220 }}>
+                            {row.errors.length > 0 ? (
+                              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                {row.errors.map((err, i) => (
+                                  <span key={i} style={{ color: "#dc2626", fontSize: 11, lineHeight: 1.2 }}>
+                                    • {err}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span style={{ color: "#94a3b8" }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                            {row.valid ? (
+                              <CheckCircleIcon size={16} color="#16a34a" />
+                            ) : (
+                              <XCircleIcon size={16} color="#dc2626" />
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Footer Actions */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    paddingTop: 8,
+                  }}
+                >
+                  <button
+                    type="button"
+                    className={styles.btnSecondary}
+                    onClick={() => setImportStep(1)}
+                    disabled={importLoading}
+                  >
+                    <ArrowLeftIcon size={14} />
+                    <span>Upload Different File</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={styles.btnPrimary}
+                    onClick={handleImportCommitSubmit}
+                    disabled={importPreview.valid_rows === 0 || importLoading}
+                  >
+                    <UploadCloudIcon size={16} />
+                    <span>
+                      {importLoading
+                        ? "Importing Workforce..."
+                        : `Import ${importPreview.valid_rows} Valid Row${importPreview.valid_rows !== 1 ? "s" : ""}`}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 3: RESULT SUMMARY */}
+            {importStep === 3 && importResult && (
+              <div className={styles.modalBody} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+                {/* Completion Banner */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 16,
+                    padding: "18px 20px",
+                    background: "#f0fdf4",
+                    border: "1px solid #bbf7d0",
+                    borderRadius: 12,
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: "50%",
+                      background: "#dcfce7",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <CheckCircleIcon size={24} color="#16a34a" />
+                  </div>
+                  <div>
+                    <h3 style={{ fontSize: 16, fontWeight: 700, color: "#166534", margin: 0 }}>
+                      Workforce Import Complete
+                    </h3>
+                    <p style={{ fontSize: 13, color: "#15803d", margin: "4px 0 0" }}>
+                      <strong>{importResult.created} record{importResult.created !== 1 ? "s" : ""}</strong> successfully created
+                      {importResult.skipped > 0 && (
+                        <span>, <strong style={{ color: "#b45309" }}>{importResult.skipped} skipped</strong></span>
+                      )}{" "}
+                      out of {importResult.total_rows} rows processed.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Created Records Table */}
+                {importResult.created_records.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                      <CheckCircleIcon size={14} color="#16a34a" />
+                      <span>Successfully Created Accounts ({importResult.created_records.length})</span>
+                    </div>
+                    <div
+                      style={{
+                        border: "1px solid #e2e8f0",
+                        borderRadius: 8,
+                        maxHeight: 200,
+                        overflowY: "auto",
+                      }}
+                    >
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ background: "#f8fafc", textAlign: "left", borderBottom: "1px solid #e2e8f0" }}>
+                            <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600 }}>Code</th>
+                            <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600 }}>Employee Name</th>
+                            <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600 }}>Work Email</th>
+                            <th style={{ padding: "8px 12px", color: "#64748b", fontWeight: 600 }}>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importResult.created_records.map((rec) => (
+                            <tr key={rec.row} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                              <td style={{ padding: "8px 12px", fontFamily: "monospace", color: "#0284c7" }}>
+                                {rec.employee_code}
+                              </td>
+                              <td style={{ padding: "8px 12px", fontWeight: 600, color: "#0f172a" }}>
+                                {rec.first_name} {rec.last_name}
+                              </td>
+                              <td style={{ padding: "8px 12px", color: "#475569" }}>{rec.email}</td>
+                              <td style={{ padding: "8px 12px", color: "#16a34a", fontSize: 11, fontWeight: 600 }}>
+                                Enrolled & Invite Sent
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Skipped Records Table */}
+                {importResult.skipped_records.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#991b1b", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                      <AlertTriangleIcon size={14} color="#dc2626" />
+                      <span>Skipped Records ({importResult.skipped_records.length})</span>
+                    </div>
+                    <div
+                      style={{
+                        border: "1px solid #fecaca",
+                        borderRadius: 8,
+                        maxHeight: 180,
+                        overflowY: "auto",
+                        background: "#fff5f5",
+                      }}
+                    >
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ background: "#fee2e2", textAlign: "left", borderBottom: "1px solid #fecaca" }}>
+                            <th style={{ padding: "8px 12px", color: "#991b1b", fontWeight: 600, width: 44 }}>Row</th>
+                            <th style={{ padding: "8px 12px", color: "#991b1b", fontWeight: 600 }}>Employee Name</th>
+                            <th style={{ padding: "8px 12px", color: "#991b1b", fontWeight: 600 }}>Email</th>
+                            <th style={{ padding: "8px 12px", color: "#991b1b", fontWeight: 600 }}>Skip Reason</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importResult.skipped_records.map((rec) => (
+                            <tr key={rec.row} style={{ borderBottom: "1px solid #fecaca" }}>
+                              <td style={{ padding: "8px 12px", fontFamily: "monospace", color: "#991b1b" }}>{rec.row}</td>
+                              <td style={{ padding: "8px 12px", fontWeight: 600, color: "#991b1b" }}>
+                                {rec.first_name} {rec.last_name}
+                              </td>
+                              <td style={{ padding: "8px 12px", color: "#991b1b" }}>{rec.email}</td>
+                              <td style={{ padding: "8px 12px", color: "#dc2626", fontWeight: 600 }}>{rec.reason}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Footer Action */}
+                <div className={styles.modalFooter} style={{ padding: "16px 0 0", margin: 0, background: "transparent", borderTop: "none" }}>
+                  <button type="button" className={styles.btnPrimary} onClick={handleImportClose}>
+                    <UsersIcon size={16} />
+                    <span>Done & View in Roster</span>
+                    <ChevronRightIcon size={14} />
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>

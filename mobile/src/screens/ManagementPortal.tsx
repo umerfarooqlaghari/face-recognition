@@ -12,6 +12,7 @@ import {
   TextInput,
   Platform,
   Image,
+  Linking,
 } from 'react-native';
 import { User } from '../types';
 import {
@@ -24,14 +25,20 @@ import {
   createManagementEmployee,
   updateManagementEmployee,
   deleteManagementEmployee,
+  deleteMyAccount,
+  clearSession,
   getTenantOffices,
   createTenantOffice,
   deleteTenantOffice,
+  downloadEmployeeImportTemplate,
+  previewEmployeeImport,
+  commitEmployeeImport,
   LeaveItem,
   OfficeItem,
 } from '../services/api';
 import { getCurrentGPSLocation } from '../services/location';
 import * as Clipboard from 'expo-clipboard';
+import * as DocumentPicker from 'expo-document-picker';
 import {
   GlobeIcon,
   LocationPinIcon,
@@ -52,6 +59,8 @@ import {
   BuildingIcon,
   UserIcon,
   CopyIcon,
+  UploadCloudIcon,
+  FileTextIcon,
 } from '../components/SvgIcons';
 import { MobileOsmMapPicker } from '../components/MobileOsmMapPicker';
 
@@ -121,6 +130,51 @@ export default function ManagementPortal({
     code: string;
     tempPass: string;
     inviteToken: string;
+  } | null>(null);
+
+  // CSV Import Wizard State
+  const [showImportModal, setShowImportModal] = useState<boolean>(false);
+  const [importStep, setImportStep] = useState<1 | 2 | 3>(1);
+  const [pickedFile, setPickedFile] = useState<{ uri: string; name: string; size?: number; mimeType?: string } | null>(null);
+  const [importLoading, setImportLoading] = useState<boolean>(false);
+  const [importError, setImportError] = useState<string>('');
+  const [importPreview, setImportPreview] = useState<{
+    total_rows: number;
+    valid_rows: number;
+    invalid_rows: number;
+    preview: Array<{
+      row: number;
+      first_name?: string | null;
+      last_name?: string | null;
+      email?: string | null;
+      employee_code?: string | null;
+      department?: string | null;
+      designation?: string | null;
+      phone_number?: string | null;
+      work_mode?: string | null;
+      valid: boolean;
+      is_duplicate: boolean;
+      errors: string[];
+    }>;
+  } | null>(null);
+  const [importResult, setImportResult] = useState<{
+    total_rows: number;
+    created: number;
+    skipped: number;
+    created_records: Array<{
+      row: number;
+      employee_code: string;
+      first_name: string;
+      last_name: string;
+      email: string;
+    }>;
+    skipped_records: Array<{
+      row: number;
+      first_name: string;
+      last_name: string;
+      email: string;
+      reason: string;
+    }>;
   } | null>(null);
 
   // Edit Employee Modal State
@@ -250,6 +304,108 @@ export default function ManagementPortal({
     } finally {
       setSubmitting(false);
     }
+  };
+
+  // CSV Import Handlers
+  const handlePickDocument = async () => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        type: ['text/csv', 'text/comma-separated-values', 'application/vnd.ms-excel', '*/*'],
+        copyToCacheDirectory: true,
+      });
+
+      if (!res.canceled && res.assets && res.assets.length > 0) {
+        const asset = res.assets[0];
+        if (!asset.name.toLowerCase().endsWith('.csv')) {
+          setImportError('Please select a valid .csv file.');
+          return;
+        }
+        setPickedFile({
+          uri: asset.uri,
+          name: asset.name,
+          size: asset.size,
+          mimeType: asset.mimeType || 'text/csv',
+        });
+        setImportError('');
+      }
+    } catch (err: any) {
+      setImportError(err.message || 'Failed to pick document');
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const templateText = await downloadEmployeeImportTemplate();
+      await Clipboard.setStringAsync(templateText);
+      Alert.alert(
+        'CSV Template Copied',
+        'The standard CSV header format has been copied to your clipboard. You can paste it into Numbers, Excel, Google Sheets, or a text editor.',
+        [{ text: 'OK' }]
+      );
+    } catch (err: any) {
+      Alert.alert('Download Error', err.message || 'Failed to download CSV template');
+    }
+  };
+
+  const handleImportPreview = async () => {
+    if (!pickedFile) {
+      setImportError('Please select a CSV file first.');
+      return;
+    }
+    setImportLoading(true);
+    setImportError('');
+    try {
+      const fd = new FormData();
+      fd.append('csv', {
+        uri: pickedFile.uri,
+        name: pickedFile.name,
+        type: pickedFile.mimeType || 'text/csv',
+      } as any);
+
+      const previewData = await previewEmployeeImport(fd);
+      setImportPreview(previewData);
+      setImportStep(2);
+    } catch (err: any) {
+      setImportError(err.message || 'Failed to preview CSV file');
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const handleImportCommit = async () => {
+    if (!pickedFile) return;
+    setImportLoading(true);
+    setImportError('');
+    try {
+      const fd = new FormData();
+      fd.append('csv', {
+        uri: pickedFile.uri,
+        name: pickedFile.name,
+        type: pickedFile.mimeType || 'text/csv',
+      } as any);
+
+      const commitData = await commitEmployeeImport(fd);
+      setImportResult(commitData);
+      setImportStep(3);
+      await loadManagementData();
+    } catch (err: any) {
+      setImportError(err.message || 'Import failed. Please try again.');
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const handleImportReset = () => {
+    setPickedFile(null);
+    setImportPreview(null);
+    setImportResult(null);
+    setImportError('');
+    setImportStep(1);
+  };
+
+  const handleImportClose = () => {
+    setShowImportModal(false);
+    handleImportReset();
   };
 
   const handleEditSubmit = async () => {
@@ -483,6 +639,30 @@ export default function ManagementPortal({
   const onSiteEmployees = stats?.on_site_employees ?? employees.filter(e => e.default_work_mode === 'on_site').length;
   const remoteEmployees = stats?.remote_employees ?? employees.filter(e => e.default_work_mode === 'remote').length;
 
+  const handleDeleteMyAccount = () => {
+    Alert.alert(
+      'Delete Management Account',
+      'Are you sure you want to permanently delete your administrator account and biometric profile? This action is irreversible.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Permanently Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteMyAccount();
+              await clearSession();
+              Alert.alert('Account Deleted', 'Your account has been deleted.');
+              onLogout();
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Failed to delete account');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <ScrollView
       style={styles.container}
@@ -598,28 +778,40 @@ export default function ManagementPortal({
                 <Text style={styles.countBadgeText}>{employees.length}</Text>
               </View>
             </View>
-            <TouchableOpacity
-              style={styles.compactPrimaryBtn}
-              onPress={() => {
-                setCreatedResult(null);
-                setFirstName('');
-                setLastName('');
-                setFullName('');
-                setEmail('');
-                setPhoneNumber('');
-                setDepartment('Engineering');
-                setDesignation('Software Engineer');
-                setEmployeeCode('');
-                setDefaultWorkMode('on_site');
-                setEmployeeRole('employee');
-                setSelectedOfficeId(offices[0]?.id || '');
-                setSelectedManagerId('');
-                setShowAddModal(true);
-              }}
-            >
-              <PlusIcon size={11} color="#ffffff" />
-              <Text style={styles.compactPrimaryBtnText}>Add Employee</Text>
-            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <TouchableOpacity
+                style={styles.compactGhostBtn}
+                onPress={() => {
+                  handleImportReset();
+                  setShowImportModal(true);
+                }}
+              >
+                <UploadCloudIcon size={12} color="#0284c7" />
+                <Text style={[styles.compactGhostBtnText, { color: '#0284c7' }]}>Import CSV</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.compactPrimaryBtn}
+                onPress={() => {
+                  setCreatedResult(null);
+                  setFirstName('');
+                  setLastName('');
+                  setFullName('');
+                  setEmail('');
+                  setPhoneNumber('');
+                  setDepartment('Engineering');
+                  setDesignation('Software Engineer');
+                  setEmployeeCode('');
+                  setDefaultWorkMode('on_site');
+                  setEmployeeRole('employee');
+                  setSelectedOfficeId(offices[0]?.id || '');
+                  setSelectedManagerId('');
+                  setShowAddModal(true);
+                }}
+              >
+                <PlusIcon size={11} color="#ffffff" />
+                <Text style={styles.compactPrimaryBtnText}>Add Employee</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {loading ? (
@@ -932,6 +1124,22 @@ export default function ManagementPortal({
         <Text style={styles.logoutBtnText}>Sign Out from Management</Text>
       </TouchableOpacity>
 
+      {/* Account Deletion & Privacy Policy (Apple Review Guideline 5.1.1(v) Compliance) */}
+      <View style={styles.complianceCard}>
+        <TouchableOpacity style={styles.deleteAccountBtn} onPress={handleDeleteMyAccount}>
+          <Text style={styles.deleteAccountBtnText}>Delete Administrator Account & Biometric Data</Text>
+        </TouchableOpacity>
+        <View style={styles.legalFooterRow}>
+          <TouchableOpacity onPress={() => Linking.openURL('https://face-scan.alpha-devs.cloud/privacy')}>
+            <Text style={styles.legalFooterLink}>Privacy Policy</Text>
+          </TouchableOpacity>
+          <Text style={styles.legalFooterDivider}>•</Text>
+          <TouchableOpacity onPress={() => Linking.openURL('https://face-scan.alpha-devs.cloud/terms')}>
+            <Text style={styles.legalFooterLink}>Terms of Service</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
       {/* ============================================================== */}
       {/* MODAL: ENROLL NEW EMPLOYEE */}
       {/* ============================================================== */}
@@ -1220,8 +1428,508 @@ export default function ManagementPortal({
       </Modal>
 
       {/* ============================================================== */}
-      {/* MODAL: EDIT EMPLOYEE (ASSIGN OFFICE & MANAGER) */}
+      {/* MODAL: IMPORT EMPLOYEES VIA CSV (3-STEP WIZARD) */}
       {/* ============================================================== */}
+      <Modal
+        visible={showImportModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={handleImportClose}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { maxHeight: '92%' }]}>
+            {/* Header */}
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <UploadCloudIcon size={20} color="#0284c7" />
+                <Text style={styles.modalTitle}>Import Staff via CSV</Text>
+              </View>
+              <TouchableOpacity onPress={handleImportClose} style={styles.modalCloseBtn}>
+                <CloseIcon size={18} color="#94a3b8" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Step Wizard Indicator */}
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: '#f8fafc',
+                paddingVertical: 10,
+                paddingHorizontal: 12,
+                borderRadius: 10,
+                marginBottom: 14,
+                gap: 6,
+              }}
+            >
+              {[
+                { n: 1 as const, label: 'Upload' },
+                { n: 2 as const, label: 'Preview' },
+                { n: 3 as const, label: 'Result' },
+              ].map((step, idx) => {
+                const isActive = importStep === step.n;
+                const isDone = importStep > step.n;
+                return (
+                  <React.Fragment key={step.n}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <View
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: 11,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor: isDone ? '#10b981' : isActive ? '#0284c7' : '#e2e8f0',
+                        }}
+                      >
+                        {isDone ? (
+                          <CheckIcon size={12} color="#ffffff" />
+                        ) : (
+                          <Text
+                            style={{
+                              fontSize: 11,
+                              fontWeight: '700',
+                              color: isActive ? '#ffffff' : '#64748b',
+                            }}
+                          >
+                            {step.n}
+                          </Text>
+                        )}
+                      </View>
+                      <Text
+                        style={{
+                          fontSize: 11,
+                          fontWeight: isActive ? '700' : '500',
+                          color: isActive ? '#0f172a' : isDone ? '#059669' : '#64748b',
+                        }}
+                      >
+                        {step.label}
+                      </Text>
+                    </View>
+                    {idx < 2 && (
+                      <View
+                        style={{
+                          width: 24,
+                          height: 2,
+                          backgroundColor: isDone ? '#10b981' : '#e2e8f0',
+                          marginHorizontal: 2,
+                        }}
+                      />
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </View>
+
+            <ScrollView style={{ maxHeight: 480 }} showsVerticalScrollIndicator={false}>
+              {/* STEP 1: UPLOAD CSV FILE */}
+              {importStep === 1 && (
+                <View style={{ gap: 14 }}>
+                  <Text style={{ fontSize: 13, color: '#64748b', lineHeight: 18 }}>
+                    Upload a CSV file containing your workforce roster. Required fields:{' '}
+                    <Text style={{ fontWeight: '700', color: '#0f172a' }}>First Name, Last Name, Email, Employee Code</Text>.
+                  </Text>
+
+                  {/* Template copy banner */}
+                  <TouchableOpacity
+                    onPress={handleDownloadTemplate}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 10,
+                      backgroundColor: '#f0f9ff',
+                      borderColor: '#bae6fd',
+                      borderWidth: 1,
+                      padding: 12,
+                      borderRadius: 10,
+                    }}
+                  >
+                    <FileTextIcon size={18} color="#0284c7" />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#0369a1' }}>
+                        Need the CSV Template?
+                      </Text>
+                      <Text style={{ fontSize: 11, color: '#0284c7', marginTop: 2 }}>
+                        Tap here to copy standard CSV headers to clipboard
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+
+                  {/* Document Picker Box */}
+                  <TouchableOpacity
+                    onPress={handlePickDocument}
+                    style={{
+                      borderWidth: 2,
+                      borderStyle: 'dashed',
+                      borderColor: pickedFile ? '#10b981' : '#cbd5e1',
+                      backgroundColor: pickedFile ? '#f0fdf4' : '#f8fafc',
+                      borderRadius: 12,
+                      padding: 24,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                    }}
+                  >
+                    {pickedFile ? (
+                      <>
+                        <CheckIcon size={28} color="#10b981" />
+                        <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', textAlign: 'center' }}>
+                          {pickedFile.name}
+                        </Text>
+                        <Text style={{ fontSize: 11, color: '#64748b' }}>
+                          {pickedFile.size ? `${(pickedFile.size / 1024).toFixed(1)} KB • ` : ''}Tap to change file
+                        </Text>
+                      </>
+                    ) : (
+                      <>
+                        <UploadCloudIcon size={30} color="#64748b" />
+                        <Text style={{ fontSize: 14, fontWeight: '600', color: '#1e293b' }}>
+                          Select CSV File
+                        </Text>
+                        <Text style={{ fontSize: 11, color: '#64748b' }}>
+                          Tap to browse device files (.csv)
+                        </Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+
+                  {/* Error Banner */}
+                  {importError ? (
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 8,
+                        backgroundColor: '#fef2f2',
+                        borderColor: '#fecaca',
+                        borderWidth: 1,
+                        padding: 10,
+                        borderRadius: 8,
+                      }}
+                    >
+                      <AlertIcon size={16} color="#dc2626" />
+                      <Text style={{ fontSize: 12, color: '#dc2626', flex: 1 }}>{importError}</Text>
+                    </View>
+                  ) : null}
+
+                  {/* Submit Button */}
+                  <TouchableOpacity
+                    style={[
+                      styles.modalPrimaryBtn,
+                      (!pickedFile || importLoading) && { opacity: 0.6 },
+                    ]}
+                    onPress={handleImportPreview}
+                    disabled={!pickedFile || importLoading}
+                  >
+                    {importLoading ? (
+                      <ActivityIndicator size="small" color="#ffffff" />
+                    ) : (
+                      <Text style={styles.modalPrimaryBtnText}>Preview Import</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {/* STEP 2: PREVIEW & VERIFY TABLE */}
+              {importStep === 2 && importPreview && (
+                <View style={{ gap: 14 }}>
+                  {/* Summary Metric Chips */}
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 4,
+                        backgroundColor: '#f0fdf4',
+                        borderColor: '#bbf7d0',
+                        borderWidth: 1,
+                        paddingVertical: 5,
+                        paddingHorizontal: 10,
+                        borderRadius: 8,
+                      }}
+                    >
+                      <CheckIcon size={13} color="#16a34a" />
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#166534' }}>
+                        {importPreview.valid_rows} Valid
+                      </Text>
+                    </View>
+
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 4,
+                        backgroundColor: '#fef2f2',
+                        borderColor: '#fecaca',
+                        borderWidth: 1,
+                        paddingVertical: 5,
+                        paddingHorizontal: 10,
+                        borderRadius: 8,
+                      }}
+                    >
+                      <AlertIcon size={13} color="#dc2626" />
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#991b1b' }}>
+                        {importPreview.invalid_rows} Invalid
+                      </Text>
+                    </View>
+
+                    {(() => {
+                      const dupCount = importPreview.preview.filter((r) => r.is_duplicate).length;
+                      return dupCount > 0 ? (
+                        <View
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 4,
+                            backgroundColor: '#fffbeb',
+                            borderColor: '#fde68a',
+                            borderWidth: 1,
+                            paddingVertical: 5,
+                            paddingHorizontal: 10,
+                            borderRadius: 8,
+                          }}
+                        >
+                          <AlertIcon size={13} color="#d97706" />
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#92400e' }}>
+                            {dupCount} Duplicate{dupCount !== 1 ? 's' : ''}
+                          </Text>
+                        </View>
+                      ) : null;
+                    })()}
+
+                    <Text style={{ marginLeft: 'auto', fontSize: 11, color: '#64748b' }}>
+                      {importPreview.total_rows} rows total
+                    </Text>
+                  </View>
+
+                  {/* Error Banner */}
+                  {importError ? (
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 8,
+                        backgroundColor: '#fef2f2',
+                        borderColor: '#fecaca',
+                        borderWidth: 1,
+                        padding: 10,
+                        borderRadius: 8,
+                      }}
+                    >
+                      <AlertIcon size={16} color="#dc2626" />
+                      <Text style={{ fontSize: 12, color: '#dc2626', flex: 1 }}>{importError}</Text>
+                    </View>
+                  ) : null}
+
+                  {/* Row-by-Row Cards */}
+                  <View style={{ gap: 8 }}>
+                    {importPreview.preview.map((row) => (
+                      <View
+                        key={row.row}
+                        style={{
+                          backgroundColor: !row.valid
+                            ? '#fef2f2'
+                            : row.is_duplicate
+                            ? '#fffbeb'
+                            : '#ffffff',
+                          borderWidth: 1,
+                          borderColor: !row.valid
+                            ? '#fecaca'
+                            : row.is_duplicate
+                            ? '#fde68a'
+                            : '#e2e8f0',
+                          borderRadius: 10,
+                          padding: 10,
+                          gap: 4,
+                        }}
+                      >
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: '#64748b' }}>
+                            Row #{row.row} • {row.employee_code || 'No Code'}
+                          </Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            {row.is_duplicate && (
+                              <View style={{ backgroundColor: '#fef3c7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                                <Text style={{ fontSize: 10, fontWeight: '700', color: '#d97706' }}>DUPLICATE</Text>
+                              </View>
+                            )}
+                            {row.valid ? (
+                              <View style={{ backgroundColor: '#dcfce7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                                <Text style={{ fontSize: 10, fontWeight: '700', color: '#16a34a' }}>VALID</Text>
+                              </View>
+                            ) : (
+                              <View style={{ backgroundColor: '#fee2e2', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                                <Text style={{ fontSize: 10, fontWeight: '700', color: '#dc2626' }}>INVALID</Text>
+                              </View>
+                            )}
+                          </View>
+                        </View>
+
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: '#0f172a' }}>
+                          {row.first_name || ''} {row.last_name || ''}
+                        </Text>
+                        <Text style={{ fontSize: 12, color: '#475569' }}>
+                          {row.email || 'Missing email'}
+                        </Text>
+
+                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 2 }}>
+                          <Text style={{ fontSize: 11, color: '#64748b' }}>
+                            {row.department || 'General'} • {row.designation || 'Team Member'}
+                          </Text>
+                          <Text style={{ fontSize: 11, color: row.work_mode === 'remote' ? '#7c3aed' : '#0284c7', fontWeight: '600' }}>
+                            {row.work_mode === 'remote' ? 'Remote' : 'On-Site'}
+                          </Text>
+                        </View>
+
+                        {row.errors.length > 0 && (
+                          <View style={{ marginTop: 4, gap: 2 }}>
+                            {row.errors.map((err, i) => (
+                              <Text key={i} style={{ fontSize: 11, color: '#dc2626' }}>
+                                • {err}
+                              </Text>
+                            ))}
+                          </View>
+                        )}
+                      </View>
+                    ))}
+                  </View>
+
+                  {/* Actions */}
+                  <View style={{ flexDirection: 'row', gap: 10, paddingTop: 6 }}>
+                    <TouchableOpacity
+                      style={[styles.compactGhostBtn, { flex: 1, paddingVertical: 10, justifyContent: 'center' }]}
+                      onPress={() => setImportStep(1)}
+                      disabled={importLoading}
+                    >
+                      <Text style={[styles.compactGhostBtnText, { fontSize: 12 }]}>Change File</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.compactPrimaryBtn,
+                        { flex: 1.5, paddingVertical: 10, justifyContent: 'center' },
+                        (importPreview.valid_rows === 0 || importLoading) && { opacity: 0.6 },
+                      ]}
+                      onPress={handleImportCommit}
+                      disabled={importPreview.valid_rows === 0 || importLoading}
+                    >
+                      {importLoading ? (
+                        <ActivityIndicator size="small" color="#ffffff" />
+                      ) : (
+                        <Text style={[styles.compactPrimaryBtnText, { fontSize: 12 }]}>
+                          Import {importPreview.valid_rows} Valid Row{importPreview.valid_rows !== 1 ? 's' : ''}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+
+              {/* STEP 3: RESULT SUMMARY */}
+              {importStep === 3 && importResult && (
+                <View style={{ gap: 14 }}>
+                  {/* Completion Card */}
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 12,
+                      backgroundColor: '#f0fdf4',
+                      borderColor: '#bbf7d0',
+                      borderWidth: 1,
+                      padding: 14,
+                      borderRadius: 12,
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: 19,
+                        backgroundColor: '#dcfce7',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <CheckIcon size={20} color="#16a34a" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 15, fontWeight: '700', color: '#166534' }}>
+                        Import Complete
+                      </Text>
+                      <Text style={{ fontSize: 12, color: '#15803d', marginTop: 2 }}>
+                        <Text style={{ fontWeight: '700' }}>{importResult.created} created</Text>
+                        {importResult.skipped > 0 ? `, ${importResult.skipped} skipped` : ''} out of {importResult.total_rows} rows
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Created Records */}
+                  {importResult.created_records.length > 0 && (
+                    <View style={{ gap: 6 }}>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#0f172a' }}>
+                        Created Accounts ({importResult.created_records.length})
+                      </Text>
+                      {importResult.created_records.map((rec) => (
+                        <View
+                          key={rec.row}
+                          style={{
+                            backgroundColor: '#ffffff',
+                            borderWidth: 1,
+                            borderColor: '#e2e8f0',
+                            borderRadius: 8,
+                            padding: 8,
+                          }}
+                        >
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#0f172a' }}>
+                            {rec.first_name} {rec.last_name} ({rec.employee_code})
+                          </Text>
+                          <Text style={{ fontSize: 11, color: '#64748b' }}>{rec.email}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+
+                  {/* Skipped Records */}
+                  {importResult.skipped_records.length > 0 && (
+                    <View style={{ gap: 6 }}>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#dc2626' }}>
+                        Skipped Records ({importResult.skipped_records.length})
+                      </Text>
+                      {importResult.skipped_records.map((rec) => (
+                        <View
+                          key={rec.row}
+                          style={{
+                            backgroundColor: '#fff5f5',
+                            borderWidth: 1,
+                            borderColor: '#fecaca',
+                            borderRadius: 8,
+                            padding: 8,
+                          }}
+                        >
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#991b1b' }}>
+                            {rec.first_name} {rec.last_name} ({rec.email})
+                          </Text>
+                          <Text style={{ fontSize: 11, color: '#dc2626' }}>{rec.reason}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+
+                  {/* Done Button */}
+                  <TouchableOpacity
+                    style={styles.modalPrimaryBtn}
+                    onPress={handleImportClose}
+                  >
+                    <Text style={styles.modalPrimaryBtnText}>Done & View Staff Roster</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
       <Modal
         visible={showEditModal}
         animationType="slide"
@@ -2601,5 +3309,42 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 13,
     fontWeight: '700',
+  },
+  complianceCard: {
+    marginTop: 20,
+    alignItems: 'center',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  deleteAccountBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    backgroundColor: '#fef2f2',
+    marginBottom: 16,
+  },
+  deleteAccountBtnText: {
+    color: '#dc2626',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  legalFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  legalFooterLink: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+  legalFooterDivider: {
+    fontSize: 12,
+    color: '#cbd5e1',
   },
 });

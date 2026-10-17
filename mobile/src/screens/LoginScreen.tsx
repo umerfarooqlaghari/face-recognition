@@ -11,29 +11,24 @@ import {
   Platform,
   ScrollView,
   Image,
+  Linking,
 } from 'react-native';
-import { loginWithPassword, loginWithBiometrics, checkBiometricsAvailable, signupTenant } from '../services/auth';
+import { loginWithPassword, loginWithBiometrics, checkBiometricsAvailable } from '../services/auth';
 import { getDeviceTelemetry } from '../services/device';
 import { AuthTokens, DeviceTelemetry } from '../types';
 import { ShieldIcon, FingerprintIcon, KeyIcon, MailIcon, BuildingIcon, UserIcon } from '../components/SvgIcons';
+
+const PRIVACY_URL = process.env.EXPO_PUBLIC_PRIVACY_URL || 'https://face-scan.alpha-devs.cloud/privacy';
+const TERMS_URL = process.env.EXPO_PUBLIC_TERMS_URL || 'https://face-scan.alpha-devs.cloud/terms';
 
 interface LoginScreenProps {
   onLoginSuccess: (tokens: AuthTokens) => void;
 }
 
 export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
-  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
-
   // Sign In fields
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-
-  // Register Organization fields
-  const [companyName, setCompanyName] = useState('');
-  const [adminName, setAdminName] = useState('');
-  const [adminEmail, setAdminEmail] = useState('');
-  const [adminPassword, setAdminPassword] = useState('');
-  const [officeName, setOfficeName] = useState('Headquarters');
 
   const [loading, setLoading] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
@@ -64,29 +59,6 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     }
   };
 
-  const handleTenantSignup = async () => {
-    if (!companyName.trim() || !adminName.trim() || !adminEmail.trim() || !adminPassword) {
-      Alert.alert('Required Fields', 'Please complete all fields to register your organization');
-      return;
-    }
-    setLoading(true);
-    try {
-      const tokens = await signupTenant({
-        company_name: companyName.trim(),
-        admin_name: adminName.trim(),
-        admin_email: adminEmail.trim().toLowerCase(),
-        admin_password: adminPassword,
-        office_name: officeName.trim() || 'Headquarters',
-      });
-      Alert.alert('Organization Registered', `Welcome to ${companyName}! You can now add employees.`);
-      onLoginSuccess(tokens);
-    } catch (err: any) {
-      Alert.alert('Registration Failed', err.message || 'Could not register organization');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleBiometricLogin = async () => {
     setLoading(true);
     try {
@@ -98,6 +70,19 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       Alert.alert('Biometrics', err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openLegalUrl = async (url: string) => {
+    try {
+      const canOpen = await Linking.canOpenURL(url);
+      if (canOpen) {
+        await Linking.openURL(url);
+      } else {
+        Alert.alert('Legal Document', `Please visit: ${url}`);
+      }
+    } catch {
+      Alert.alert('Legal Document', `Please visit: ${url}`);
     }
   };
 
@@ -116,203 +101,91 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           />
           <View style={styles.logoBadge}>
             <ShieldIcon size={14} color="#1e3a8a" />
-            <Text style={styles.logoBadgeText}>ENTERPRISE PORTAL</Text>
+            <Text style={styles.logoBadgeText}>ENTERPRISE WORKFORCE</Text>
           </View>
-          <Text style={styles.title}>Biometric Attendance</Text>
+          <Text style={styles.title}>AttendFace Portal</Text>
           <Text style={styles.subtitle}>
-            {authMode === 'signin'
-              ? 'Sign in to your organization account'
-              : 'Register your organization & create admin'}
+            Sign in to verify attendance and access your employee portal
           </Text>
         </View>
 
-        {/* Auth Mode Tabs (Sign In vs Register Organization) */}
-        <View style={styles.tabContainer}>
-          <TouchableOpacity
-            style={[styles.tabButton, authMode === 'signin' && styles.tabButtonActive]}
-            onPress={() => setAuthMode('signin')}
-          >
-            <Text style={[styles.tabButtonText, authMode === 'signin' && styles.tabButtonTextActive]}>
-              Sign In
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tabButton, authMode === 'signup' && styles.tabButtonActive]}
-            onPress={() => setAuthMode('signup')}
-          >
-            <Text style={[styles.tabButtonText, authMode === 'signup' && styles.tabButtonTextActive]}>
-              Register Organization
-            </Text>
-          </TouchableOpacity>
+        {/* Enterprise Notice Banner */}
+        <View style={styles.noticeBanner}>
+          <Text style={styles.noticeBannerTitle}>Authorized Personnel Access</Text>
+          <Text style={styles.noticeBannerText}>
+            AttendFace is an enterprise workforce management system. User credentials are provisioned by your employer.
+          </Text>
         </View>
 
         {/* Main Card */}
         <View style={styles.card}>
-          {authMode === 'signin' ? (
-            /* --- SIGN IN FORM --- */
-            <>
-              <View style={styles.inputGroup}>
-                <View style={styles.labelRow}>
-                  <MailIcon size={14} color="#64748b" />
-                  <Text style={styles.label}>Work Email</Text>
-                </View>
-                <TextInput
-                  style={styles.input}
-                  placeholder="name@company.com"
-                  placeholderTextColor="#94a3b8"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  value={email}
-                  onChangeText={setEmail}
-                />
-              </View>
+          <View style={styles.inputGroup}>
+            <View style={styles.labelRow}>
+              <MailIcon size={14} color="#64748b" />
+              <Text style={styles.label}>Work Email</Text>
+            </View>
+            <TextInput
+              style={styles.input}
+              placeholder="name@company.com"
+              placeholderTextColor="#94a3b8"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              value={email}
+              onChangeText={setEmail}
+            />
+          </View>
 
-              <View style={[styles.inputGroup, { marginTop: 16 }]}>
-                <View style={styles.labelRow}>
-                  <KeyIcon size={14} color="#64748b" />
-                  <Text style={styles.label}>Password</Text>
-                </View>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter your assigned password"
-                  placeholderTextColor="#94a3b8"
-                  secureTextEntry
-                  value={password}
-                  onChangeText={setPassword}
-                />
-              </View>
+          <View style={[styles.inputGroup, { marginTop: 16 }]}>
+            <View style={styles.labelRow}>
+              <KeyIcon size={14} color="#64748b" />
+              <Text style={styles.label}>Password</Text>
+            </View>
+            <TextInput
+              style={styles.input}
+              placeholder="Enter your assigned password"
+              placeholderTextColor="#94a3b8"
+              secureTextEntry
+              value={password}
+              onChangeText={setPassword}
+            />
+          </View>
 
-              <TouchableOpacity
-                style={[styles.primaryButton, loading && styles.buttonDisabled]}
-                onPress={handlePasswordLogin}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#ffffff" />
-                ) : (
-                  <Text style={styles.primaryButtonText}>Sign In</Text>
-                )}
-              </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.primaryButton, loading && styles.buttonDisabled]}
+            onPress={handlePasswordLogin}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#ffffff" />
+            ) : (
+              <Text style={styles.primaryButtonText}>Sign In</Text>
+            )}
+          </TouchableOpacity>
 
-              {biometricAvailable && (
-                <TouchableOpacity
-                  style={styles.biometricButton}
-                  onPress={handleBiometricLogin}
-                  disabled={loading}
-                >
-                  <FingerprintIcon size={18} color="#0f172a" />
-                  <Text style={styles.biometricButtonText}>Sign In with Face ID / Touch ID</Text>
-                </TouchableOpacity>
-              )}
-
-              <TouchableOpacity
-                style={styles.switchModeRow}
-                onPress={() => setAuthMode('signup')}
-              >
-                <Text style={styles.switchModeText}>
-                  New organization? <Text style={styles.switchModeLink}>Sign up as Management</Text>
-                </Text>
-              </TouchableOpacity>
-            </>
-          ) : (
-            /* --- REGISTER ORGANIZATION FORM --- */
-            <>
-              <View style={styles.inputGroup}>
-                <View style={styles.labelRow}>
-                  <BuildingIcon size={14} color="#64748b" />
-                  <Text style={styles.label}>Company / Organization Name</Text>
-                </View>
-                <TextInput
-                  style={styles.input}
-                  placeholder="e.g. Apex Corporation"
-                  placeholderTextColor="#94a3b8"
-                  value={companyName}
-                  onChangeText={setCompanyName}
-                />
-              </View>
-
-              <View style={[styles.inputGroup, { marginTop: 14 }]}>
-                <View style={styles.labelRow}>
-                  <UserIcon size={14} color="#64748b" />
-                  <Text style={styles.label}>Administrator Full Name</Text>
-                </View>
-                <TextInput
-                  style={styles.input}
-                  placeholder="e.g. Umer Farooq"
-                  placeholderTextColor="#94a3b8"
-                  value={adminName}
-                  onChangeText={setAdminName}
-                />
-              </View>
-
-              <View style={[styles.inputGroup, { marginTop: 14 }]}>
-                <View style={styles.labelRow}>
-                  <MailIcon size={14} color="#64748b" />
-                  <Text style={styles.label}>Administrator Work Email</Text>
-                </View>
-                <TextInput
-                  style={styles.input}
-                  placeholder="admin@company.com"
-                  placeholderTextColor="#94a3b8"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  value={adminEmail}
-                  onChangeText={setAdminEmail}
-                />
-              </View>
-
-              <View style={[styles.inputGroup, { marginTop: 14 }]}>
-                <View style={styles.labelRow}>
-                  <KeyIcon size={14} color="#64748b" />
-                  <Text style={styles.label}>Admin Password</Text>
-                </View>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Create master password"
-                  placeholderTextColor="#94a3b8"
-                  secureTextEntry
-                  value={adminPassword}
-                  onChangeText={setAdminPassword}
-                />
-              </View>
-
-              <View style={[styles.inputGroup, { marginTop: 14 }]}>
-                <View style={styles.labelRow}>
-                  <BuildingIcon size={14} color="#64748b" />
-                  <Text style={styles.label}>Office Name (Optional)</Text>
-                </View>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Headquarters"
-                  placeholderTextColor="#94a3b8"
-                  value={officeName}
-                  onChangeText={setOfficeName}
-                />
-              </View>
-
-              <TouchableOpacity
-                style={[styles.primaryButton, loading && styles.buttonDisabled]}
-                onPress={handleTenantSignup}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#ffffff" />
-                ) : (
-                  <Text style={styles.primaryButtonText}>Register Organization</Text>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.switchModeRow}
-                onPress={() => setAuthMode('signin')}
-              >
-                <Text style={styles.switchModeText}>
-                  Already have an account? <Text style={styles.switchModeLink}>Sign In</Text>
-                </Text>
-              </TouchableOpacity>
-            </>
+          {biometricAvailable && (
+            <TouchableOpacity
+              style={styles.biometricButton}
+              onPress={handleBiometricLogin}
+              disabled={loading}
+            >
+              <FingerprintIcon size={18} color="#0f172a" />
+              <Text style={styles.biometricButtonText}>Sign In with Face ID / Touch ID</Text>
+            </TouchableOpacity>
           )}
         </View>
+
+        {/* Legal & Privacy Policy Footer (Required for Apple Review) */}
+        <View style={styles.legalFooter}>
+          <TouchableOpacity onPress={() => openLegalUrl(PRIVACY_URL)}>
+            <Text style={styles.legalLink}>Privacy Policy</Text>
+          </TouchableOpacity>
+          <Text style={styles.legalDivider}>•</Text>
+          <TouchableOpacity onPress={() => openLegalUrl(TERMS_URL)}>
+            <Text style={styles.legalLink}>Terms of Service</Text>
+          </TouchableOpacity>
+        </View>
+
+
 
         {deviceInfo && (
           <View style={styles.deviceCard}>
@@ -488,6 +361,42 @@ const styles = StyleSheet.create({
   switchModeLink: {
     color: '#1e3a8a',
     fontWeight: '700',
+  },
+  noticeBanner: {
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 20,
+  },
+  noticeBannerTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
+    marginBottom: 4,
+  },
+  noticeBannerText: {
+    fontSize: 12,
+    color: '#15803d',
+    lineHeight: 17,
+  },
+  legalFooter: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 24,
+    gap: 8,
+  },
+  legalLink: {
+    fontSize: 12,
+    color: '#1e3a8a',
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+  legalDivider: {
+    fontSize: 12,
+    color: '#94a3b8',
   },
   deviceCard: {
     marginTop: 24,

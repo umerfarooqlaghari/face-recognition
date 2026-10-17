@@ -8,10 +8,12 @@ import {
   Alert,
   Dimensions,
   Platform,
+  Linking,
+  ScrollView,
 } from 'react-native';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { enrollFaceReference } from '../services/api';
-import { CloseIcon, FlipCameraIcon, CheckIcon } from '../components/SvgIcons';
+import { CloseIcon, FlipCameraIcon, CheckIcon, ShieldIcon } from '../components/SvgIcons';
 
 const { width, height } = Dimensions.get('window');
 
@@ -30,11 +32,76 @@ export default function EnrollmentScreen({
   onSuccess,
   onCancel,
 }: EnrollmentScreenProps) {
+  const [hasConsented, setHasConsented] = useState(false);
   const [facing, setFacing] = useState<CameraType>('front');
   const [permission, requestPermission] = useCameraPermissions();
   const [isCapturing, setIsCapturing] = useState(false);
   const [enrollStatus, setEnrollStatus] = useState<'idle' | 'uploading' | 'success'>('idle');
   const cameraRef = useRef<CameraView>(null);
+
+  const handleRequestPermission = async () => {
+    if (permission && !permission.canAskAgain) {
+      await Linking.openSettings();
+    } else {
+      const res = await requestPermission();
+      if (!res.granted) {
+        Alert.alert(
+          'Camera Access Required',
+          'Please enable camera access in your device settings to capture your face scan.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ]
+        );
+      }
+    }
+  };
+
+  // 1. Apple App Store Guideline 5.1.2 & Biometric Privacy Disclosure
+  if (!hasConsented) {
+    return (
+      <View style={styles.consentContainer}>
+        <ScrollView contentContainerStyle={styles.consentScroll}>
+          <View style={styles.consentCard}>
+            <View style={styles.shieldBadge}>
+              <ShieldIcon size={32} color="#0284c7" />
+            </View>
+            <Text style={styles.consentTitle}>Biometric Face Enrollment</Text>
+            <Text style={styles.consentSubtitle}>
+              Employee Identity Verification Consent
+            </Text>
+
+            <View style={styles.consentBulletBox}>
+              <Text style={styles.consentBulletTitle}>Data Privacy & Protection Notice:</Text>
+              <Text style={styles.consentBulletPoint}>
+                • <Text style={styles.boldText}>Mathematical Representation:</Text> Your face photograph is converted on-device into an encrypted 512-dimensional vector embedding.
+              </Text>
+              <Text style={styles.consentBulletPoint}>
+                • <Text style={styles.boldText}>Strict Attendance Use:</Text> Vector data is used exclusively to verify employee attendance and prevent unauthorized proxy check-ins.
+              </Text>
+              <Text style={styles.consentBulletPoint}>
+                • <Text style={styles.boldText}>No Third-Party Sharing:</Text> We do not sell, track, or share your biometric data with any external third parties or advertisers.
+              </Text>
+              <Text style={styles.consentBulletPoint}>
+                • <Text style={styles.boldText}>Erasure & Retention:</Text> Embeddings are retained only during your employment and permanently deleted upon account termination.
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.consentButton}
+              onPress={() => setHasConsented(true)}
+            >
+              <Text style={styles.consentButtonText}>I Consent & Proceed</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.cancelTextButton} onPress={onCancel}>
+              <Text style={styles.cancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
 
   if (!permission) {
     return (
@@ -48,8 +115,8 @@ export default function EnrollmentScreen({
     return (
       <View style={styles.centerContainer}>
         <Text style={styles.permissionText}>Camera permission is required to capture reference face scan.</Text>
-        <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
-          <Text style={styles.permissionButtonText}>Grant Camera Permission</Text>
+        <TouchableOpacity style={styles.permissionButton} onPress={handleRequestPermission}>
+          <Text style={styles.permissionButtonText}>Enable Camera in Settings</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.cancelTextButton} onPress={onCancel}>
           <Text style={styles.cancelText}>Cancel</Text>
@@ -337,5 +404,84 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     marginTop: 4,
+  },
+  consentContainer: {
+    flex: 1,
+    backgroundColor: '#0f172a',
+  },
+  consentScroll: {
+    padding: 24,
+    justifyContent: 'center',
+    minHeight: '100%',
+  },
+  consentCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    padding: 24,
+    alignItems: 'center',
+  },
+  shieldBadge: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#f0f9ff',
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  consentTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0f172a',
+    textAlign: 'center',
+  },
+  consentSubtitle: {
+    fontSize: 13,
+    color: '#64748b',
+    marginTop: 4,
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  consentBulletBox: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    padding: 16,
+    width: '100%',
+    marginBottom: 24,
+  },
+  consentBulletTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#1e3a8a',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 10,
+  },
+  consentBulletPoint: {
+    fontSize: 13,
+    color: '#334155',
+    lineHeight: 19,
+    marginBottom: 10,
+  },
+  boldText: {
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  consentButton: {
+    backgroundColor: '#0f172a',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    width: '100%',
+    alignItems: 'center',
+  },
+  consentButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });

@@ -1,8 +1,45 @@
 import * as SecureStore from 'expo-secure-store';
+import { File as ExpoFile } from 'expo-file-system';
 import { AuthTokens, User } from '../types';
 import { getDeviceTelemetry } from './device';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://face-recognition-nx5p.onrender.com/api';
+
+/**
+ * Universal file attacher for modern Expo / React Native fetch (WinterCG compliant).
+ * Prevents "Unsupported FormData part implementation" error on iOS/Android.
+ */
+async function appendFileToFormData(
+  formData: FormData,
+  fieldName: string,
+  imageUri: string,
+  filename?: string
+): Promise<void> {
+  const safeName = filename || imageUri.split('/').pop() || 'photo.jpg';
+
+  try {
+    // 1. Modern Expo File (Blob compatible)
+    const file = new ExpoFile(imageUri);
+    formData.append(fieldName, file as any);
+    return;
+  } catch {}
+
+  try {
+    // 2. Fetch local URI and convert to standard Blob
+    const res = await fetch(imageUri);
+    const blob = await res.blob();
+    formData.append(fieldName, blob, safeName);
+    return;
+  } catch {}
+
+  // 3. Fallback to legacy RN object
+  // @ts-ignore
+  formData.append(fieldName, {
+    uri: imageUri,
+    name: safeName,
+    type: 'image/jpeg',
+  });
+}
 
 const TOKEN_KEY = 'attend_access_token_v1';
 const REFRESH_KEY = 'attend_refresh_token_v1';
@@ -138,16 +175,7 @@ export async function enrollFaceReference(
 ): Promise<{ success: boolean; message: string; user_id: string }> {
   const formData = new FormData();
 
-  const filename = imageUri.split('/').pop() || 'face_enrollment.jpg';
-  const match = /\.(\w+)$/.exec(filename);
-  const type = match ? `image/${match[1]}` : 'image/jpeg';
-
-  // @ts-ignore
-  formData.append('file', {
-    uri: imageUri,
-    name: filename,
-    type,
-  });
+  await appendFileToFormData(formData, 'file', imageUri);
 
   if (options.inviteToken) {
     formData.append('invite_token', options.inviteToken);
@@ -313,16 +341,7 @@ export async function markAttendanceCheckIn(params: {
 }> {
   const formData = new FormData();
 
-  const filename = params.imageUri.split('/').pop() || 'probe_face.jpg';
-  const match = /\.(\w+)$/.exec(filename);
-  const type = match ? `image/${match[1]}` : 'image/jpeg';
-
-  // @ts-ignore
-  formData.append('file', {
-    uri: params.imageUri,
-    name: filename,
-    type,
-  });
+  await appendFileToFormData(formData, 'file', params.imageUri);
 
   formData.append('latitude', String(params.latitude));
   formData.append('longitude', String(params.longitude));

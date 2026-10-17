@@ -39,8 +39,8 @@ class FaceEngine:
         if width < 120 or height < 120:
             return False, f"Image resolution too low ({width}x{height}). Minimum required is 120x120.", None
 
-        if width > 4096 or height > 4096:
-            pil_img.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
+        if width > 800 or height > 800:
+            pil_img.thumbnail((800, 800), Image.Resampling.BILINEAR)
 
         # Blur estimation via Laplacian variance on grayscale
         gray = np.array(pil_img.convert("L"), dtype=np.float32)

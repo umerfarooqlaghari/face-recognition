@@ -218,4 +218,30 @@ export const FileTextIcon: React.FC<IconProps> = ({ size = 18, color = '#1e3a8a'
   </Svg>
 );
 
+export const FaceScanIcon: React.FC<IconProps> = ({ size = 24, color = '#0f172a' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M3 7V5a2 2 0 0 1 2-2h2" />
+    <Path d="M17 3h2a2 2 0 0 1 2 2v2" />
+    <Path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+    <Path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+    <Circle cx="12" cy="11" r="3.5" />
+    <Path d="M8.5 17c.8-1.5 2-2 3.5-2s2.7.5 3.5 2" />
+  </Svg>
+);
+
+export const ArrowLeftIcon: React.FC<IconProps> = ({ size = 20, color = '#0f172a' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Line x1="19" y1="12" x2="5" y2="12" />
+    <Polyline points="12 19 5 12 12 5" />
+  </Svg>
+);
+
+export const ArrowRightIcon: React.FC<IconProps> = ({ size = 20, color = '#0f172a' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Line x1="5" y1="12" x2="19" y2="12" />
+    <Polyline points="12 5 19 12 12 19" />
+  </Svg>
+);
+
+
 

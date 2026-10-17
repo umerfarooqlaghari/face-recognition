@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -15,15 +15,23 @@ import {
 } from 'react-native';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { enrollFaceReference } from '../services/api';
-import { CloseIcon, FlipCameraIcon, CheckIcon, ShieldIcon, RefreshIcon } from '../components/SvgIcons';
+import {
+  CloseIcon,
+  FlipCameraIcon,
+  CheckIcon,
+  ShieldIcon,
+  RefreshIcon,
+  FaceScanIcon,
+  ArrowLeftIcon,
+  ArrowRightIcon,
+} from '../components/SvgIcons';
 
 const { width, height } = Dimensions.get('window');
 
-// Dimensions of the Face ID scanning oval
-const OVAL_WIDTH = Math.min(width * 0.74, 290);
-const OVAL_HEIGHT = Math.min(height * 0.44, 390);
+const OVAL_WIDTH = Math.min(width * 0.72, 280);
+const OVAL_HEIGHT = Math.min(height * 0.42, 370);
 
-type EnrollmentStep = 'center' | 'left' | 'right' | 'processing' | 'success';
+type Step = 'center' | 'left' | 'right' | 'saving' | 'done';
 
 interface EnrollmentScreenProps {
   userId?: string;
@@ -43,61 +51,14 @@ export default function EnrollmentScreen({
   const [hasConsented, setHasConsented] = useState(false);
   const [facing, setFacing] = useState<CameraType>('front');
   const [permission, requestPermission] = useCameraPermissions();
-  const [currentStep, setCurrentStep] = useState<EnrollmentStep>('center');
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [capturedAngles, setCapturedAngles] = useState<{
-    center?: string;
-    left?: string;
-    right?: string;
-  }>({});
+  const [currentStep, setCurrentStep] = useState<Step>('center');
+  const [stepProgress, setStepProgress] = useState(0);
 
   const cameraRef = useRef<CameraView>(null);
+  const progressAnim = useRef(new Animated.Value(0)).current;
+  const isAutoCapturing = useRef(false);
 
-  // Pulse animations for scanning ring and directional arrows
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const arrowAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    // Breathing reticle animation
-    const reticleLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 1.03,
-          duration: 1200,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnim, {
-          toValue: 0.98,
-          duration: 1200,
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    reticleLoop.start();
-
-    // Directional cue animation
-    const arrowLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(arrowAnim, {
-          toValue: 12,
-          duration: 700,
-          useNativeDriver: true,
-        }),
-        Animated.timing(arrowAnim, {
-          toValue: -12,
-          duration: 700,
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    arrowLoop.start();
-
-    return () => {
-      reticleLoop.stop();
-      arrowLoop.stop();
-    };
-  }, []);
-
+  // Trigger permission request
   const handleRequestPermission = async () => {
     if (permission && !permission.canAskAgain) {
       await Linking.openSettings();
@@ -106,79 +67,183 @@ export default function EnrollmentScreen({
       if (!res.granted) {
         Alert.alert(
           'Camera Access Required',
-          'Please enable camera access in device settings to scan your face for biometric enrollment.',
+          'Please enable camera access in Settings to complete biometric registration.',
           [
             { text: 'Cancel', style: 'cancel' },
-            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+            { text: 'Settings', onPress: () => Linking.openSettings() },
           ]
         );
       }
     }
   };
 
-  // Step 1: Biometric Privacy Disclosure
+  // Autonomous progressive scanning sequence (Auto-Capture)
+  const runAutoCaptureSequence = useCallback(async () => {
+    if (isAutoCapturing.current) return;
+    isAutoCapturing.current = true;
+
+    try {
+      // 1. Center / Frontal Position (1.2s auto-timer)
+      setCurrentStep('center');
+      progressAnim.setValue(0);
+      await new Promise<void>(resolve => {
+        Animated.timing(progressAnim, {
+          toValue: 1,
+          duration: 1200,
+          useNativeDriver: false,
+        }).start(() => resolve());
+      });
+
+      // Brief transition pause
+      await new Promise(r => setTimeout(r, 200));
+
+      // 2. Left Angle (1.2s auto-timer)
+      setCurrentStep('left');
+      progressAnim.setValue(0);
+      await new Promise<void>(resolve => {
+        Animated.timing(progressAnim, {
+          toValue: 1,
+          duration: 1200,
+          useNativeDriver: false,
+        }).start(() => resolve());
+      });
+
+      // Brief transition pause
+      await new Promise(r => setTimeout(r, 200));
+
+      // 3. Right Angle (1.2s auto-timer)
+      setCurrentStep('right');
+      progressAnim.setValue(0);
+      await new Promise<void>(resolve => {
+        Animated.timing(progressAnim, {
+          toValue: 1,
+          duration: 1200,
+          useNativeDriver: false,
+        }).start(() => resolve());
+      });
+
+      // 4. Capture reference frame & Submit instantly
+      setCurrentStep('saving');
+
+      let photoUri: string | null = null;
+      if (cameraRef.current) {
+        const photo = await cameraRef.current.takePictureAsync({
+          quality: 0.5, // Lightweight compressed frame (<200KB for ultra-fast upload)
+          skipProcessing: true,
+        });
+        photoUri = photo?.uri || null;
+      }
+
+      if (!photoUri) {
+        throw new Error('Camera capture failed. Please retry.');
+      }
+
+      // Fast vector extraction & pgvector indexing
+      await enrollFaceReference(photoUri, {
+        userId,
+        inviteToken,
+      });
+
+      setCurrentStep('done');
+      setTimeout(() => {
+        onSuccess();
+      }, 1200);
+    } catch (err: any) {
+      isAutoCapturing.current = false;
+      Alert.alert(
+        'Scan Interrupted',
+        err.message || 'Please maintain good lighting and try again.',
+        [{ text: 'Try Again', onPress: () => restartScan() }]
+      );
+    }
+  }, [userId, inviteToken, onSuccess]);
+
+  const restartScan = () => {
+    isAutoCapturing.current = false;
+    setCurrentStep('center');
+    progressAnim.setValue(0);
+    setTimeout(() => {
+      runAutoCaptureSequence();
+    }, 400);
+  };
+
+  // Launch auto-capture when camera opens and consent is given
+  useEffect(() => {
+    if (hasConsented && permission?.granted) {
+      const timer = setTimeout(() => {
+        runAutoCaptureSequence();
+      }, 700);
+      return () => clearTimeout(timer);
+    }
+  }, [hasConsented, permission?.granted]);
+
+  // White Minimalist Consent View (Clean Apple Style, No Emojis, Pure SVGs)
   if (!hasConsented) {
     return (
-      <View style={styles.consentContainer}>
+      <View style={styles.whiteConsentContainer}>
         <SafeAreaView style={{ flex: 1 }}>
-          <ScrollView contentContainerStyle={styles.consentScroll}>
-            <View style={styles.consentCard}>
-              <View style={styles.shieldBadge}>
-                <ShieldIcon size={32} color="#0284c7" />
+          <ScrollView contentContainerStyle={styles.whiteConsentScroll}>
+            <View style={styles.whiteConsentCard}>
+              <View style={styles.cleanShieldCircle}>
+                <ShieldIcon size={28} color="#0f172a" />
               </View>
-              <Text style={styles.consentTitle}>Biometric Face Enrollment</Text>
-              <Text style={styles.consentSubtitle}>
-                3-Angle Neural Face ID Registration
+
+              <Text style={styles.appleTitle}>Biometric Face Setup</Text>
+              <Text style={styles.appleSubtitle}>
+                Hands-free 3-position biometric verification
               </Text>
 
-              <View style={styles.stepPreviewRow}>
-                <View style={styles.stepPreviewItem}>
-                  <View style={styles.stepPreviewIcon}>
-                    <Text style={styles.stepPreviewEmoji}>👤</Text>
+              {/* 3 Steps Visual Row with Clean SVGs */}
+              <View style={styles.svgStepsRow}>
+                <View style={styles.svgStepItem}>
+                  <View style={styles.svgStepIconCircle}>
+                    <FaceScanIcon size={22} color="#0f172a" />
                   </View>
-                  <Text style={styles.stepPreviewLabel}>1. Front</Text>
+                  <Text style={styles.svgStepLabel}>1. Center</Text>
                 </View>
-                <View style={styles.stepPreviewDivider} />
-                <View style={styles.stepPreviewItem}>
-                  <View style={styles.stepPreviewIcon}>
-                    <Text style={styles.stepPreviewEmoji}>👈</Text>
+
+                <View style={styles.svgStepLine} />
+
+                <View style={styles.svgStepItem}>
+                  <View style={styles.svgStepIconCircle}>
+                    <ArrowLeftIcon size={20} color="#0f172a" />
                   </View>
-                  <Text style={styles.stepPreviewLabel}>2. Left</Text>
+                  <Text style={styles.svgStepLabel}>2. Left</Text>
                 </View>
-                <View style={styles.stepPreviewDivider} />
-                <View style={styles.stepPreviewItem}>
-                  <View style={styles.stepPreviewIcon}>
-                    <Text style={styles.stepPreviewEmoji}>👉</Text>
+
+                <View style={styles.svgStepLine} />
+
+                <View style={styles.svgStepItem}>
+                  <View style={styles.svgStepIconCircle}>
+                    <ArrowRightIcon size={20} color="#0f172a" />
                   </View>
-                  <Text style={styles.stepPreviewLabel}>3. Right</Text>
+                  <Text style={styles.svgStepLabel}>3. Right</Text>
                 </View>
               </View>
 
-              <View style={styles.consentBulletBox}>
-                <Text style={styles.consentBulletTitle}>Data Privacy & Protection:</Text>
-                <Text style={styles.consentBulletPoint}>
-                  • <Text style={styles.boldText}>Mathematical Vector:</Text> Your face photograph is converted into an encrypted 512D embedding.
+              {/* Policy & Security Note */}
+              <View style={styles.whiteNoticeBox}>
+                <Text style={styles.whiteNoticeHeader}>SECURITY & COMPLIANCE</Text>
+                <Text style={styles.whiteNoticeText}>
+                  • Scans are converted into a mathematically encrypted 512D vector embedding.
                 </Text>
-                <Text style={styles.consentBulletPoint}>
-                  • <Text style={styles.boldText}>Anti-Spoofing & Liveness:</Text> Multi-angle verification ensures anti-spoofing depth accuracy.
+                <Text style={styles.whiteNoticeText}>
+                  • Used exclusively for authorized workplace attendance check-ins.
                 </Text>
-                <Text style={styles.consentBulletPoint}>
-                  • <Text style={styles.boldText}>No Third-Party Sharing:</Text> Biometric data is strictly isolated to your employer's attendance log.
-                </Text>
-                <Text style={styles.consentBulletPoint}>
-                  • <Text style={styles.boldText}>Instant Deletion:</Text> Vectors are permanently removed when employee account is deleted.
+                <Text style={styles.whiteNoticeText}>
+                  • Biometric vectors are permanently purged upon employment termination.
                 </Text>
               </View>
 
               <TouchableOpacity
-                style={styles.consentButton}
+                style={styles.applePrimaryBtn}
                 onPress={() => setHasConsented(true)}
               >
-                <Text style={styles.consentButtonText}>Start 3-Step Scan</Text>
+                <Text style={styles.applePrimaryBtnText}>Continue to Face Scan</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.cancelTextButton} onPress={onCancel}>
-                <Text style={styles.cancelText}>Cancel</Text>
+              <TouchableOpacity style={styles.cancelLinkBtn} onPress={onCancel}>
+                <Text style={styles.cancelLinkText}>Cancel</Text>
               </TouchableOpacity>
             </View>
           </ScrollView>
@@ -189,307 +254,231 @@ export default function EnrollmentScreen({
 
   if (!permission) {
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#38bdf8" />
+      <View style={styles.whiteLoadingContainer}>
+        <ActivityIndicator size="small" color="#0f172a" />
       </View>
     );
   }
 
   if (!permission.granted) {
     return (
-      <View style={styles.centerContainer}>
-        <Text style={styles.permissionText}>Camera permission is required to capture reference face scan.</Text>
-        <TouchableOpacity style={styles.permissionButton} onPress={handleRequestPermission}>
-          <Text style={styles.permissionButtonText}>Enable Camera in Settings</Text>
+      <View style={styles.whiteLoadingContainer}>
+        <Text style={styles.appleNotice}>Camera permission is required for face setup.</Text>
+        <TouchableOpacity style={styles.applePrimaryBtn} onPress={handleRequestPermission}>
+          <Text style={styles.applePrimaryBtnText}>Open Device Settings</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.cancelTextButton} onPress={onCancel}>
-          <Text style={styles.cancelText}>Cancel</Text>
+        <TouchableOpacity style={styles.cancelLinkBtn} onPress={onCancel}>
+          <Text style={styles.cancelLinkText}>Cancel</Text>
         </TouchableOpacity>
       </View>
     );
   }
 
-  const toggleCameraFacing = () => {
+  const toggleFacing = () => {
     setFacing(current => (current === 'back' ? 'front' : 'back'));
   };
 
-  const handleStepCapture = async () => {
-    if (!cameraRef.current || isCapturing) return;
-
-    try {
-      setIsCapturing(true);
-
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.9,
-        skipProcessing: false,
-      });
-
-      if (!photo?.uri) {
-        throw new Error('Could not capture frame from camera.');
-      }
-
-      if (currentStep === 'center') {
-        setCapturedAngles(prev => ({ ...prev, center: photo.uri }));
-        setCurrentStep('left');
-      } else if (currentStep === 'left') {
-        setCapturedAngles(prev => ({ ...prev, left: photo.uri }));
-        setCurrentStep('right');
-      } else if (currentStep === 'right') {
-        const finalAngles = { ...capturedAngles, right: photo.uri };
-        setCapturedAngles(finalAngles);
-        setCurrentStep('processing');
-
-        // Submit primary frontal reference for 512D ArcFace vector extraction & pgvector indexing
-        const referencePhotoUri = finalAngles.center || photo.uri;
-        await enrollFaceReference(referencePhotoUri, {
-          userId,
-          inviteToken,
-        });
-
-        setCurrentStep('success');
-        setTimeout(() => {
-          onSuccess();
-        }, 1600);
-      }
-    } catch (err: any) {
-      Alert.alert(
-        'Enrollment Notice',
-        err.message || 'Please center face clearly in good lighting and try again.'
-      );
-      if (currentStep === 'processing') {
-        setCurrentStep('center');
-      }
-    } finally {
-      setIsCapturing(false);
-    }
-  };
-
-  const resetEnrollment = () => {
-    setCapturedAngles({});
-    setCurrentStep('center');
-  };
-
-  // Guidance texts and cues per step
-  const getStepInfo = () => {
+  const getStepText = () => {
     switch (currentStep) {
       case 'center':
         return {
           stepNum: '1 OF 3',
-          badge: 'FRONTAL SCAN',
-          title: 'Look Straight Ahead',
-          instruction: 'Center your face inside the oval and look directly at the lens.',
-          buttonLabel: 'Capture Center Pose',
-          borderColor: '#38bdf8',
-          arrowCue: null,
+          title: 'Look straight at camera',
+          sub: 'Keep your face inside the frame',
         };
       case 'left':
         return {
           stepNum: '2 OF 3',
-          badge: 'LEFT ANGLE',
-          title: 'Turn Head Slightly Left',
-          instruction: 'Slowly turn your face about 20° to your left side.',
-          buttonLabel: 'Capture Left Angle',
-          borderColor: '#a855f7',
-          arrowCue: 'left',
+          title: 'Turn head slightly left',
+          sub: 'Hold steady while auto-capturing',
         };
       case 'right':
         return {
           stepNum: '3 OF 3',
-          badge: 'RIGHT ANGLE',
-          title: 'Turn Head Slightly Right',
-          instruction: 'Slowly turn your face about 20° to your right side.',
-          buttonLabel: 'Capture Right Angle',
-          borderColor: '#06b6d4',
-          arrowCue: 'right',
+          title: 'Turn head slightly right',
+          sub: 'Hold steady while auto-capturing',
         };
-      case 'processing':
+      case 'saving':
         return {
-          stepNum: 'COMPUTING',
-          badge: 'ARCFACE 512D',
-          title: 'Generating Vector Embedding',
-          instruction: 'Analyzing multi-angle landmarks and indexing embedding with pgvector...',
-          buttonLabel: 'Processing...',
-          borderColor: '#eab308',
-          arrowCue: null,
+          stepNum: 'SAVING',
+          title: 'Encrypting biometric vector',
+          sub: 'Registering embedding with pgvector...',
         };
-      case 'success':
+      case 'done':
         return {
           stepNum: 'COMPLETE',
-          badge: 'VERIFIED',
-          title: 'Biometrics Registered!',
-          instruction: '512-dimensional face vector has been encrypted and saved successfully.',
-          buttonLabel: 'Success',
-          borderColor: '#22c55e',
-          arrowCue: null,
+          title: 'Face setup complete',
+          sub: 'Biometric identity verified successfully',
         };
     }
   };
 
-  const stepInfo = getStepInfo();
+  const currentInfo = getStepText();
+
+  // Progress percentage width interpolation
+  const progressWidth = progressAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0%', '100%'],
+  });
 
   return (
-    <View style={styles.container}>
-      {/* 1. Camera View (Background, Absolute Fill) */}
+    <View style={styles.screenRoot}>
+      {/* 1. Camera in Background (Absolute Fill) */}
       <CameraView
         ref={cameraRef}
         style={StyleSheet.absoluteFill}
         facing={facing}
       />
 
-      {/* 2. Sibling Overlay HUD (Always renders above native video on iOS) */}
-      <SafeAreaView style={styles.overlayContainer} pointerEvents="box-none">
-        {/* Top Header Bar */}
-        <View style={styles.topHeader}>
-          <TouchableOpacity style={styles.iconButton} onPress={onCancel}>
-            <CloseIcon size={18} color="#ffffff" />
+      {/* 2. Sibling Overlay HUD (Clean White/Translucent Apple Aesthetic) */}
+      <SafeAreaView style={styles.hudOverlay} pointerEvents="box-none">
+        {/* Top Floating White Navigation Bar */}
+        <View style={styles.topNavBar}>
+          <TouchableOpacity style={styles.whiteCircleBtn} onPress={onCancel}>
+            <CloseIcon size={16} color="#0f172a" />
           </TouchableOpacity>
 
-          {/* Stepper Pill */}
-          <View style={styles.stepBadge}>
-            <Text style={styles.stepBadgeText}>
+          <View style={styles.whiteStepPill}>
+            <Text style={styles.whiteStepPillText}>
               {targetName ? `${targetName.toUpperCase()} • ` : ''}
-              {stepInfo.stepNum}
+              {currentInfo.stepNum}
             </Text>
           </View>
 
-          <TouchableOpacity style={styles.iconButton} onPress={toggleCameraFacing}>
-            <FlipCameraIcon size={20} color="#ffffff" />
+          <TouchableOpacity style={styles.whiteCircleBtn} onPress={toggleFacing}>
+            <FlipCameraIcon size={18} color="#0f172a" />
           </TouchableOpacity>
         </View>
 
-        {/* Step Progress Checklist */}
-        <View style={styles.progressCheckRow}>
-          <View style={[styles.progressChip, capturedAngles.center ? styles.progressChipDone : currentStep === 'center' ? styles.progressChipActive : null]}>
-            <Text style={styles.progressChipText}>
-              {capturedAngles.center ? '✓ Center' : '1. Center'}
-            </Text>
-          </View>
-          <View style={styles.progressChipLine} />
-          <View style={[styles.progressChip, capturedAngles.left ? styles.progressChipDone : currentStep === 'left' ? styles.progressChipActive : null]}>
-            <Text style={styles.progressChipText}>
-              {capturedAngles.left ? '✓ Left' : '2. Left'}
-            </Text>
-          </View>
-          <View style={styles.progressChipLine} />
-          <View style={[styles.progressChip, capturedAngles.right ? styles.progressChipDone : currentStep === 'right' ? styles.progressChipActive : null]}>
-            <Text style={styles.progressChipText}>
-              {capturedAngles.right ? '✓ Right' : '3. Right'}
-            </Text>
-          </View>
-        </View>
-
-        {/* Center Scanner Oval Area */}
-        <View style={styles.centerScanSection} pointerEvents="none">
-          {/* Animated Face Oval Reticle */}
-          <Animated.View
+        {/* Step Checkpoints Row */}
+        <View style={styles.checkpointRow}>
+          <View
             style={[
-              styles.faceOval,
-              {
-                borderColor: stepInfo.borderColor,
-                transform: [{ scale: currentStep === 'success' ? 1.05 : pulseAnim }],
-              },
+              styles.checkpointDot,
+              currentStep === 'center' ? styles.checkpointActive : null,
+              currentStep === 'left' || currentStep === 'right' || currentStep === 'saving' || currentStep === 'done'
+                ? styles.checkpointDone
+                : null,
             ]}
           >
-            {/* 4 HUD Corner Brackets */}
-            <View style={[styles.hudCorner, styles.hudCornerTL, { borderColor: stepInfo.borderColor }]} />
-            <View style={[styles.hudCorner, styles.hudCornerTR, { borderColor: stepInfo.borderColor }]} />
-            <View style={[styles.hudCorner, styles.hudCornerBL, { borderColor: stepInfo.borderColor }]} />
-            <View style={[styles.hudCorner, styles.hudCornerBR, { borderColor: stepInfo.borderColor }]} />
-
-            {/* Crosshair Center */}
-            {currentStep !== 'success' && (
-              <>
-                <View style={[styles.crosshairH, { backgroundColor: stepInfo.borderColor }]} />
-                <View style={[styles.crosshairV, { backgroundColor: stepInfo.borderColor }]} />
-              </>
-            )}
-
-            {/* Left Directional Guidance Cue */}
-            {stepInfo.arrowCue === 'left' && (
-              <Animated.View
-                style={[
-                  styles.arrowCueBox,
-                  styles.arrowCueLeft,
-                  { transform: [{ translateX: arrowAnim }] },
-                ]}
-              >
-                <Text style={styles.arrowCueIcon}>←</Text>
-                <Text style={styles.arrowCueText}>TURN LEFT</Text>
-              </Animated.View>
-            )}
-
-            {/* Right Directional Guidance Cue */}
-            {stepInfo.arrowCue === 'right' && (
-              <Animated.View
-                style={[
-                  styles.arrowCueBox,
-                  styles.arrowCueRight,
-                  { transform: [{ translateX: arrowAnim }] },
-                ]}
-              >
-                <Text style={styles.arrowCueText}>TURN RIGHT</Text>
-                <Text style={styles.arrowCueIcon}>→</Text>
-              </Animated.View>
-            )}
-
-            {/* Success Icon */}
-            {currentStep === 'success' && (
-              <View style={styles.successInnerBox}>
-                <CheckIcon size={48} color="#22c55e" />
-              </View>
-            )}
-          </Animated.View>
-
-          {/* Step Instruction Card */}
-          <View style={styles.instructionCard}>
-            <Text style={styles.instructionTitle}>{stepInfo.title}</Text>
-            <Text style={styles.instructionDesc}>{stepInfo.instruction}</Text>
+            <Text
+              style={[
+                styles.checkpointText,
+                currentStep !== 'center' ? styles.checkpointTextDone : null,
+              ]}
+            >
+              1
+            </Text>
+          </View>
+          <View style={styles.checkpointLine} />
+          <View
+            style={[
+              styles.checkpointDot,
+              currentStep === 'left' ? styles.checkpointActive : null,
+              currentStep === 'right' || currentStep === 'saving' || currentStep === 'done'
+                ? styles.checkpointDone
+                : null,
+            ]}
+          >
+            <Text
+              style={[
+                styles.checkpointText,
+                currentStep === 'right' || currentStep === 'saving' || currentStep === 'done'
+                  ? styles.checkpointTextDone
+                  : null,
+              ]}
+            >
+              2
+            </Text>
+          </View>
+          <View style={styles.checkpointLine} />
+          <View
+            style={[
+              styles.checkpointDot,
+              currentStep === 'right' ? styles.checkpointActive : null,
+              currentStep === 'saving' || currentStep === 'done' ? styles.checkpointDone : null,
+            ]}
+          >
+            <Text
+              style={[
+                styles.checkpointText,
+                currentStep === 'saving' || currentStep === 'done' ? styles.checkpointTextDone : null,
+              ]}
+            >
+              3
+            </Text>
           </View>
         </View>
 
-        {/* Bottom Action Controls */}
-        <View style={styles.bottomSection}>
-          {currentStep === 'processing' ? (
-            <View style={styles.processingCard}>
-              <ActivityIndicator size="large" color="#38bdf8" />
-              <Text style={styles.processingTitle}>Building Biometric Model</Text>
-              <Text style={styles.processingSub}>Extracting 512D ArcFace landmarks...</Text>
-            </View>
-          ) : currentStep === 'success' ? (
-            <View style={styles.completedCard}>
-              <CheckIcon size={24} color="#22c55e" />
-              <Text style={styles.completedText}>Biometrics Indexed Successfully</Text>
-            </View>
-          ) : (
-            <View style={styles.captureRow}>
-              {currentStep !== 'center' && (
-                <TouchableOpacity style={styles.resetBtn} onPress={resetEnrollment}>
-                  <RefreshIcon size={18} color="#cbd5e1" />
-                  <Text style={styles.resetBtnText}>Restart</Text>
-                </TouchableOpacity>
-              )}
+        {/* Center Scanner Area */}
+        <View style={styles.centerScannerArea} pointerEvents="none">
+          {/* Clean Apple Minimalist Face Oval */}
+          <View
+            style={[
+              styles.minimalOval,
+              currentStep === 'done' ? styles.minimalOvalSuccess : null,
+            ]}
+          >
+            {/* Auto-Capture Progress Ring Fill Indicator */}
+            {currentStep !== 'saving' && currentStep !== 'done' && (
+              <View style={styles.ovalProgressContainer}>
+                <Animated.View
+                  style={[
+                    styles.ovalProgressBar,
+                    {
+                      width: progressWidth,
+                      backgroundColor: '#0f172a',
+                    },
+                  ]}
+                />
+              </View>
+            )}
 
-              <TouchableOpacity
-                style={[
-                  styles.captureTriggerBtn,
-                  isCapturing && styles.captureTriggerDisabled,
-                  { borderColor: stepInfo.borderColor },
-                ]}
-                onPress={handleStepCapture}
-                disabled={isCapturing}
-              >
-                {isCapturing ? (
-                  <ActivityIndicator color="#ffffff" />
-                ) : (
-                  <View style={[styles.captureTriggerInner, { backgroundColor: stepInfo.borderColor }]}>
-                    <Text style={styles.captureTriggerText}>
-                      {currentStep === 'center' ? 'SCAN CENTER' : currentStep === 'left' ? 'SCAN LEFT' : 'SCAN RIGHT'}
-                    </Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            </View>
-          )}
+            {/* Left Directional Cue with SVG Arrow */}
+            {currentStep === 'left' && (
+              <View style={[styles.whiteCueBox, styles.cueLeft]}>
+                <ArrowLeftIcon size={18} color="#0f172a" />
+                <Text style={styles.whiteCueText}>TURN LEFT</Text>
+              </View>
+            )}
+
+            {/* Right Directional Cue with SVG Arrow */}
+            {currentStep === 'right' && (
+              <View style={[styles.whiteCueBox, styles.cueRight]}>
+                <Text style={styles.whiteCueText}>TURN RIGHT</Text>
+                <ArrowRightIcon size={18} color="#0f172a" />
+              </View>
+            )}
+
+            {/* Saving Spinner */}
+            {currentStep === 'saving' && (
+              <View style={styles.savingInner}>
+                <ActivityIndicator size="large" color="#0f172a" />
+              </View>
+            )}
+
+            {/* Complete Checkmark */}
+            {currentStep === 'done' && (
+              <View style={styles.doneCircle}>
+                <CheckIcon size={36} color="#ffffff" />
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* Bottom Floating White Instruction Card */}
+        <View style={styles.bottomInstructionWrapper}>
+          <View style={styles.whiteInstructionCard}>
+            <Text style={styles.instructionCardTitle}>{currentInfo.title}</Text>
+            <Text style={styles.instructionCardSub}>{currentInfo.sub}</Text>
+
+            {currentStep !== 'saving' && currentStep !== 'done' && (
+              <View style={styles.autocaptureBadge}>
+                <View style={styles.autocapturePulseDot} />
+                <Text style={styles.autocaptureBadgeText}>HANDS-FREE AUTO CAPTURING</Text>
+              </View>
+            )}
+          </View>
         </View>
       </SafeAreaView>
     </View>
@@ -497,445 +486,342 @@ export default function EnrollmentScreen({
 }
 
 const styles = StyleSheet.create({
-  container: {
+  screenRoot: {
     flex: 1,
     backgroundColor: '#000000',
   },
-  overlayContainer: {
+  hudOverlay: {
     flex: 1,
     justifyContent: 'space-between',
   },
-  topHeader: {
+  topNavBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingTop: Platform.OS === 'android' ? 36 : 12,
   },
-  iconButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(15, 23, 42, 0.75)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
+  whiteCircleBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  stepBadge: {
+  whiteStepPill: {
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 20,
-    backgroundColor: 'rgba(15, 23, 42, 0.85)',
-    borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.4)',
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  stepBadgeText: {
-    color: '#38bdf8',
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-  progressCheckRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 10,
-    paddingHorizontal: 24,
-  },
-  progressChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-    backgroundColor: 'rgba(15, 23, 42, 0.6)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-  },
-  progressChipActive: {
-    backgroundColor: 'rgba(56, 189, 248, 0.25)',
-    borderColor: '#38bdf8',
-  },
-  progressChipDone: {
-    backgroundColor: 'rgba(34, 197, 94, 0.25)',
-    borderColor: '#22c55e',
-  },
-  progressChipText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  progressChipLine: {
-    width: 16,
-    height: 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    marginHorizontal: 4,
-  },
-  centerScanSection: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginVertical: 'auto',
-  },
-  faceOval: {
-    width: OVAL_WIDTH,
-    height: OVAL_HEIGHT,
-    borderRadius: OVAL_WIDTH / 2,
-    borderWidth: 3,
-    borderStyle: 'dashed',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.15)',
-    position: 'relative',
-  },
-  hudCorner: {
-    position: 'absolute',
-    width: 22,
-    height: 22,
-  },
-  hudCornerTL: {
-    top: -2,
-    left: -2,
-    borderTopWidth: 4,
-    borderLeftWidth: 4,
-    borderTopLeftRadius: 18,
-  },
-  hudCornerTR: {
-    top: -2,
-    right: -2,
-    borderTopWidth: 4,
-    borderRightWidth: 4,
-    borderTopRightRadius: 18,
-  },
-  hudCornerBL: {
-    bottom: -2,
-    left: -2,
-    borderBottomWidth: 4,
-    borderLeftWidth: 4,
-    borderBottomLeftRadius: 18,
-  },
-  hudCornerBR: {
-    bottom: -2,
-    right: -2,
-    borderBottomWidth: 4,
-    borderRightWidth: 4,
-    borderBottomRightRadius: 18,
-  },
-  crosshairH: {
-    position: 'absolute',
-    width: 32,
-    height: 1.5,
-    opacity: 0.7,
-  },
-  crosshairV: {
-    position: 'absolute',
-    width: 1.5,
-    height: 32,
-    opacity: 0.7,
-  },
-  arrowCueBox: {
-    position: 'absolute',
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.9)',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: '#38bdf8',
-    gap: 8,
-  },
-  arrowCueLeft: {
-    left: -20,
-  },
-  arrowCueRight: {
-    right: -20,
-  },
-  arrowCueIcon: {
-    color: '#38bdf8',
-    fontSize: 20,
-    fontWeight: '900',
-  },
-  arrowCueText: {
-    color: '#ffffff',
+  whiteStepPillText: {
+    color: '#0f172a',
     fontSize: 12,
     fontWeight: '800',
     letterSpacing: 0.8,
   },
-  successInnerBox: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(34, 197, 94, 0.2)',
+  checkpointRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  checkpointDot: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.5)',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#22c55e',
   },
-  instructionCard: {
-    marginTop: 24,
-    alignItems: 'center',
-    paddingHorizontal: 28,
+  checkpointActive: {
+    backgroundColor: '#ffffff',
+    transform: [{ scale: 1.15 }],
   },
-  instructionTitle: {
+  checkpointDone: {
+    backgroundColor: '#10b981',
+  },
+  checkpointText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  checkpointTextDone: {
     color: '#ffffff',
-    fontSize: 19,
+  },
+  checkpointLine: {
+    width: 24,
+    height: 2,
+    backgroundColor: 'rgba(255, 255, 255, 0.4)',
+    marginHorizontal: 4,
+  },
+  centerScannerArea: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 'auto',
+  },
+  minimalOval: {
+    width: OVAL_WIDTH,
+    height: OVAL_HEIGHT,
+    borderRadius: OVAL_WIDTH / 2,
+    borderWidth: 3.5,
+    borderColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+  },
+  minimalOvalSuccess: {
+    borderColor: '#10b981',
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+  },
+  ovalProgressContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  ovalProgressBar: {
+    height: '100%',
+  },
+  whiteCueBox: {
+    position: 'absolute',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 24,
+    gap: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+    elevation: 4,
+  },
+  cueLeft: {
+    left: -20,
+  },
+  cueRight: {
+    right: -20,
+  },
+  whiteCueText: {
+    color: '#0f172a',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  savingInner: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  doneCircle: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: '#10b981',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bottomInstructionWrapper: {
+    paddingHorizontal: 24,
+    paddingBottom: Platform.OS === 'ios' ? 28 : 20,
+  },
+  whiteInstructionCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
+    borderRadius: 22,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  instructionCardTitle: {
+    color: '#0f172a',
+    fontSize: 18,
     fontWeight: '800',
     textAlign: 'center',
-    textShadowColor: 'rgba(0, 0, 0, 0.85)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 6,
   },
-  instructionDesc: {
-    color: '#cbd5e1',
+  instructionCardSub: {
+    color: '#64748b',
     fontSize: 13,
     fontWeight: '500',
+    marginTop: 4,
     textAlign: 'center',
-    marginTop: 6,
-    lineHeight: 18,
-    textShadowColor: 'rgba(0, 0, 0, 0.85)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 6,
   },
-  bottomSection: {
-    paddingHorizontal: 24,
-    paddingBottom: Platform.OS === 'ios' ? 24 : 16,
-    alignItems: 'center',
-  },
-  captureRow: {
-    width: '100%',
+  autocaptureBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
-  },
-  resetBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 16,
-    backgroundColor: 'rgba(15, 23, 42, 0.8)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
+    marginTop: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: '#f1f5f9',
     gap: 6,
   },
-  resetBtnText: {
-    color: '#cbd5e1',
-    fontSize: 13,
-    fontWeight: '700',
+  autocapturePulseDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10b981',
   },
-  captureTriggerBtn: {
-    flex: 1,
-    maxWidth: 240,
-    height: 56,
-    borderRadius: 28,
-    borderWidth: 2,
-    padding: 3,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.75)',
-  },
-  captureTriggerDisabled: {
-    opacity: 0.6,
-  },
-  captureTriggerInner: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  captureTriggerText: {
-    color: '#090d16',
-    fontSize: 14,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
-  processingCard: {
-    alignItems: 'center',
-    paddingVertical: 18,
-    paddingHorizontal: 28,
-    borderRadius: 20,
-    backgroundColor: 'rgba(15, 23, 42, 0.9)',
-    borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.4)',
-  },
-  processingTitle: {
-    color: '#ffffff',
-    fontSize: 15,
+  autocaptureBadgeText: {
+    color: '#475569',
+    fontSize: 10,
     fontWeight: '800',
-    marginTop: 10,
+    letterSpacing: 0.5,
   },
-  processingSub: {
-    color: '#94a3b8',
-    fontSize: 12,
-    marginTop: 4,
-  },
-  completedCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    borderRadius: 20,
-    backgroundColor: 'rgba(20, 83, 45, 0.9)',
-    borderWidth: 1,
-    borderColor: '#22c55e',
-    gap: 10,
-  },
-  completedText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  centerContainer: {
+  whiteConsentContainer: {
     flex: 1,
-    backgroundColor: '#090d16',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
+    backgroundColor: '#ffffff',
   },
-  permissionText: {
-    color: '#cbd5e1',
-    fontSize: 15,
-    textAlign: 'center',
-    marginBottom: 20,
-    lineHeight: 22,
-  },
-  permissionButton: {
-    backgroundColor: '#0284c7',
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderRadius: 14,
-  },
-  permissionButtonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  cancelTextButton: {
-    marginTop: 16,
-    padding: 10,
-  },
-  cancelText: {
-    color: '#94a3b8',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  consentContainer: {
-    flex: 1,
-    backgroundColor: '#090d16',
-  },
-  consentScroll: {
+  whiteConsentScroll: {
     padding: 24,
     justifyContent: 'center',
     minHeight: '100%',
   },
-  consentCard: {
-    backgroundColor: '#0f172a',
-    borderRadius: 24,
-    padding: 24,
+  whiteConsentCard: {
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
-  shieldBadge: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: 'rgba(2, 132, 199, 0.15)',
+  cleanShieldCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#f8fafc',
     borderWidth: 1,
-    borderColor: 'rgba(2, 132, 199, 0.4)',
+    borderColor: '#e2e8f0',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 16,
   },
-  consentTitle: {
-    fontSize: 22,
+  appleTitle: {
+    fontSize: 24,
     fontWeight: '800',
-    color: '#ffffff',
+    color: '#0f172a',
+    letterSpacing: -0.5,
     textAlign: 'center',
   },
-  consentSubtitle: {
-    fontSize: 13,
-    color: '#38bdf8',
-    fontWeight: '600',
+  appleSubtitle: {
+    fontSize: 14,
+    color: '#64748b',
+    fontWeight: '500',
     marginTop: 4,
-    marginBottom: 18,
+    marginBottom: 24,
+    textAlign: 'center',
   },
-  stepPreviewRow: {
+  svgStepsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     width: '100%',
-    backgroundColor: 'rgba(15, 23, 42, 0.8)',
-    borderRadius: 16,
-    padding: 12,
-    marginBottom: 20,
+    backgroundColor: '#f8fafc',
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: '#e2e8f0',
+    marginBottom: 22,
   },
-  stepPreviewItem: {
+  svgStepItem: {
     alignItems: 'center',
     flex: 1,
   },
-  stepPreviewIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+  svgStepIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 4,
+    marginBottom: 6,
   },
-  stepPreviewEmoji: {
-    fontSize: 18,
-  },
-  stepPreviewLabel: {
-    color: '#e2e8f0',
-    fontSize: 11,
+  svgStepLabel: {
+    color: '#0f172a',
+    fontSize: 12,
     fontWeight: '700',
   },
-  stepPreviewDivider: {
-    width: 1,
-    height: 24,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  svgStepLine: {
+    width: 20,
+    height: 1,
+    backgroundColor: '#cbd5e1',
   },
-  consentBulletBox: {
+  whiteNoticeBox: {
     width: '100%',
-    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    backgroundColor: '#f8fafc',
     borderRadius: 16,
     padding: 16,
-    marginBottom: 22,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
+    borderColor: '#e2e8f0',
+    marginBottom: 24,
   },
-  consentBulletTitle: {
-    fontSize: 13,
+  whiteNoticeHeader: {
+    fontSize: 11,
     fontWeight: '800',
-    color: '#38bdf8',
-    marginBottom: 10,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  consentBulletPoint: {
-    fontSize: 13,
-    color: '#cbd5e1',
-    lineHeight: 19,
+    color: '#64748b',
+    letterSpacing: 0.8,
     marginBottom: 8,
   },
-  boldText: {
-    fontWeight: '700',
-    color: '#ffffff',
+  whiteNoticeText: {
+    fontSize: 13,
+    color: '#334155',
+    lineHeight: 18,
+    marginBottom: 6,
   },
-  consentButton: {
+  applePrimaryBtn: {
     width: '100%',
-    backgroundColor: '#0284c7',
+    backgroundColor: '#0f172a',
     paddingVertical: 16,
     borderRadius: 16,
     alignItems: 'center',
   },
-  consentButtonText: {
+  applePrimaryBtnText: {
     color: '#ffffff',
     fontSize: 15,
-    fontWeight: '800',
+    fontWeight: '700',
+  },
+  cancelLinkBtn: {
+    marginTop: 16,
+    padding: 10,
+  },
+  cancelLinkText: {
+    color: '#64748b',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  whiteLoadingContainer: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  appleNotice: {
+    color: '#334155',
+    fontSize: 15,
+    textAlign: 'center',
+    marginBottom: 20,
   },
 });

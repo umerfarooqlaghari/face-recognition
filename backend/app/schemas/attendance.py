@@ -12,6 +12,9 @@ class AttendanceCheckInResponse(BaseModel):
     check_in_time: datetime
     check_out_time: Optional[datetime] = None
     status: str
+    is_late: bool = False
+    minutes_late: int = 0
+    hours_worked: Optional[float] = None
     verification_type: str
     similarity_score: float
     liveness_score: float
@@ -26,6 +29,9 @@ class AttendanceRecordItem(BaseModel):
     check_in_time: datetime
     check_out_time: Optional[datetime] = None
     status: str
+    is_late: bool = False
+    minutes_late: int = 0
+    hours_worked: Optional[float] = None
     verification_type: str
     similarity_score: float
     distance_from_office_meters: Optional[float] = None
@@ -37,6 +43,59 @@ class AttendanceTodayStatus(BaseModel):
     is_on_leave: bool = False
     leave_status: Optional[str] = None
     leave_reason: Optional[str] = None
+
+class CalendarDayItem(BaseModel):
+    date: str
+    day: int
+    day_of_week: str
+    is_weekend: bool
+    check_in_time: Optional[str] = None
+    check_out_time: Optional[str] = None
+    check_in_iso: Optional[str] = None
+    check_out_iso: Optional[str] = None
+    status: str # present, late, on_leave, absent, weekend, checked_in, missing_checkout, upcoming
+    is_late: bool = False
+    minutes_late: int = 0
+    hours_worked: Optional[float] = None
+    hours_worked_formatted: Optional[str] = None
+    verification_type: Optional[str] = None
+    leave_reason: Optional[str] = None
+
+class AttendanceCalendarSummary(BaseModel):
+    total_days: int
+    working_days: int
+    present_days: int
+    late_days: int
+    absent_days: int
+    leave_days: int
+    total_hours_worked: float
+    average_hours_per_day: float
+    on_time_rate_pct: float
+
+class AttendanceCalendarResponse(BaseModel):
+    user_id: uuid.UUID
+    employee_name: str
+    employee_code: str
+    year: int
+    month: int
+    month_name: str
+    timezone: str
+    shift_name: str
+    scheduled_start_time: str
+    scheduled_end_time: str
+    grace_period_minutes: int
+    days: List[CalendarDayItem]
+    summary: AttendanceCalendarSummary
+
+class LateDigestRequest(BaseModel):
+    target_date: Optional[date] = None
+
+class LateDigestResponse(BaseModel):
+    status: str
+    target_date: date
+    late_count: int
+    recipients: List[str]
+    message: str
 
 class AttendanceRegularizationCreate(BaseModel):
     date: date

@@ -62,8 +62,8 @@ export default function SupportPage() {
               <p style={{ fontSize: 13, color: "#64748b", marginBottom: 12 }}>
                 Our support team is available 24/7 with guaranteed under-2-hour SLA response for critical production issues.
               </p>
-              <a href="mailto:support@alpha-devs.cloud" style={{ color: "#4f46e5", fontWeight: 600, fontSize: 14, textDecoration: "none" }}>
-                support@alpha-devs.cloud →
+              <a href="mailto:info@alpha-devs.cloud" style={{ color: "#4f46e5", fontWeight: 600, fontSize: 14, textDecoration: "none" }}>
+                info@alpha-devs.cloud →
               </a>
             </div>
 

@@ -197,8 +197,9 @@ export default function EmployeePortal({
 
   const handleCheckOut = async () => {
     try {
-      await markAttendanceCheckOut();
-      Alert.alert('Checked Out', 'Your check-out time has been recorded successfully.');
+      const res = await markAttendanceCheckOut();
+      const workedMsg = res.hours_worked != null ? ` Total worked: ${res.hours_worked} hrs.` : '';
+      Alert.alert('Checked Out', `Your check-out time has been recorded successfully.${workedMsg}`);
       loadAttendanceData();
     } catch (err: any) {
       Alert.alert('Check-Out Failed', err.message);
@@ -378,7 +379,9 @@ export default function EmployeePortal({
             ) : (
               <View style={styles.completedBox}>
                 <CheckIcon size={14} color="#059669" />
-                <Text style={styles.completedText}>Day Completed (Checked out)</Text>
+                <Text style={styles.completedText}>
+                  Day Completed {todayAttendance?.record?.check_out_time ? `• Out at ${new Date(todayAttendance.record.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '(Checked out)'}
+                </Text>
               </View>
             )}
           </View>

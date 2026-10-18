@@ -382,13 +382,20 @@ export async function markAttendanceCheckIn(params: {
   return res.json();
 }
 
-export async function markAttendanceCheckOut(): Promise<{
+export async function markAttendanceCheckOut(coords?: {
+  latitude?: number;
+  longitude?: number;
+}): Promise<{
   id: string;
+  user_id: string;
+  check_in_time: string;
   check_out_time: string;
+  hours_worked?: number | null;
   message: string;
 }> {
   const res = await authFetch('/attendance/check-out', {
     method: 'POST',
+    body: JSON.stringify(coords || {}),
   });
 
   if (!res.ok) {
@@ -794,6 +801,152 @@ export async function commitEmployeeImport(formData: FormData): Promise<{
   }
   return res.json();
 }
+
+export async function getEmployeeAttendanceCalendar(
+  userId: string,
+  year?: number,
+  month?: number
+): Promise<{
+  user_id: string;
+  employee_name: string;
+  year: number;
+  month: number;
+  month_name: string;
+  timezone: string;
+  resolved_shift: {
+    shift_name: string;
+    work_start_time: string;
+    work_end_time: string;
+    grace_period_minutes: number;
+    timezone: string;
+    is_custom: boolean;
+  };
+  summary: {
+    days_present: number;
+    days_late: number;
+    days_absent: number;
+    days_on_leave: number;
+    total_hours_worked: number;
+    on_time_rate_pct: number;
+  };
+  days: Array<{
+    date: string;
+    day_of_month: number;
+    day_name: string;
+    is_weekend: boolean;
+    is_future: boolean;
+    status: 'present' | 'late' | 'absent' | 'leave' | 'weekend';
+    check_in_time?: string | null;
+    check_out_time?: string | null;
+    check_in_local?: string | null;
+    check_out_local?: string | null;
+    hours_worked?: number | null;
+    is_late: boolean;
+    minutes_late: number;
+    is_on_leave: boolean;
+    leave_type?: string | null;
+  }>;
+}> {
+  const query = new URLSearchParams();
+  if (year) query.set('year', String(year));
+  if (month) query.set('month', String(month));
+  const qs = query.toString() ? `?${query.toString()}` : '';
+
+  const res = await authFetch(`/attendance/calendar/${userId}${qs}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to fetch attendance calendar');
+  }
+  return res.json();
+}
+
+export async function updateEmployeeShift(
+  userId: string,
+  data: {
+    work_start_time?: string | null;
+    work_end_time?: string | null;
+    grace_period_minutes?: number | null;
+    timezone?: string | null;
+    shift_name?: string | null;
+  }
+): Promise<any> {
+  const res = await authFetch(`/management/employees/${userId}/shift`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to update employee shift');
+  }
+  return res.json();
+}
+
+export async function resetEmployeeShift(userId: string): Promise<any> {
+  return updateEmployeeShift(userId, {
+    work_start_time: null,
+    work_end_time: null,
+    grace_period_minutes: null,
+    timezone: null,
+    shift_name: null,
+  });
+}
+
+export async function updateTenantTimings(data: {
+  default_timezone?: string;
+  default_work_start_time?: string;
+  default_work_end_time?: string;
+  default_grace_period_minutes?: number;
+}): Promise<any> {
+  const res = await authFetch('/management/tenant/timings', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to update company office timings');
+  }
+  return res.json();
+}
+
+export async function updateOfficeTimings(
+  officeId: string,
+  data: {
+    timezone?: string;
+    work_start_time?: string;
+    work_end_time?: string;
+    grace_period_minutes?: number;
+  }
+): Promise<any> {
+  const res = await authFetch(`/management/offices/${officeId}/timings`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to update campus office timings');
+  }
+  return res.json();
+}
+
+export async function sendLateDigest(dateStr?: string): Promise<{
+  status: string;
+  target_date: string;
+  late_count: number;
+  recipients: string[];
+  message: string;
+}> {
+  const qs = dateStr ? `?target_date=${encodeURIComponent(dateStr)}` : '';
+  const res = await authFetch(`/attendance/send-late-digest${qs}`, {
+    method: 'POST',
+    body: dateStr ? JSON.stringify({ target_date: dateStr }) : undefined,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to send late arrivals digest');
+  }
+  return res.json();
+}
+
 
 
 

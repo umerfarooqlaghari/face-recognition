@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column, String, Boolean, DateTime, Date, Float, Integer,
-    ForeignKey, Text, UniqueConstraint
+    ForeignKey, Text, UniqueConstraint, Index
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
@@ -31,6 +31,12 @@ class Tenant(Base):
     subscription_current_period_end = Column(DateTime(timezone=True), nullable=True)
     subscription_seat_count = Column(Integer, default=1, nullable=False)
 
+    # Office Timings & Shifts (Timezone-Aware)
+    default_timezone = Column(String(50), default="UTC", nullable=False)
+    default_work_start_time = Column(String(10), default="09:00", nullable=False)
+    default_work_end_time = Column(String(10), default="18:00", nullable=False)
+    default_grace_period_minutes = Column(Integer, default=15, nullable=False)
+
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     offices = relationship("Office", back_populates="tenant", cascade="all, delete-orphan")
     attendance_records = relationship("AttendanceRecord", back_populates="tenant")
@@ -45,6 +51,13 @@ class Office(Base):
     longitude = Column(Float, nullable=False)
     radius_meters = Column(Integer, default=200, nullable=False)
     address = Column(Text, nullable=True)
+
+    # Regional Office Timings & Grace Period (Overrides Tenant default)
+    timezone = Column(String(50), default="UTC", nullable=False)
+    work_start_time = Column(String(10), default="09:00", nullable=False)
+    work_end_time = Column(String(10), default="18:00", nullable=False)
+    grace_period_minutes = Column(Integer, default=15, nullable=False)
+
     created_at = Column(DateTime(timezone=True), default=get_utc_now)
 
     tenant = relationship("Tenant", back_populates="offices")
@@ -68,6 +81,14 @@ class User(Base):
     office_id = Column(UUID(as_uuid=True), ForeignKey("offices.id"), nullable=True)
     manager_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     default_work_mode = Column(String(20), default="on_site", nullable=False) # on_site, remote
+
+    # Individual Custom Shift / Working Hours Override (e.g., Night Shift)
+    custom_work_start_time = Column(String(10), nullable=True) # e.g. "22:00"
+    custom_work_end_time = Column(String(10), nullable=True)   # e.g. "06:00"
+    custom_grace_period_minutes = Column(Integer, nullable=True) # e.g. 15
+    shift_name = Column(String(50), nullable=True)              # e.g. "Night Shift"
+    custom_timezone = Column(String(50), nullable=True)         # e.g. "Asia/Karachi"
+
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=get_utc_now)
     updated_at = Column(DateTime(timezone=True), default=get_utc_now, onupdate=get_utc_now)
@@ -157,17 +178,24 @@ class AttendanceRecord(Base):
     check_out_time = Column(DateTime(timezone=True), nullable=True)
     verification_type = Column(String(20), nullable=False) # face_geo, face_remote
     status = Column(String(20), default="present", nullable=False) # present, late, half_day, absent
+    is_late = Column(Boolean, default=False, nullable=False)
+    minutes_late = Column(Integer, default=0, nullable=False)
+    hours_worked = Column(Float, nullable=True) # Computed on check-out
+    late_notified_at = Column(DateTime(timezone=True), nullable=True) # Tracks individual late email dispatch
     similarity_score = Column(Float, nullable=False)
     liveness_score = Column(Float, nullable=False)
     device_id = Column(UUID(as_uuid=True), ForeignKey("user_devices.id"), nullable=True)
     check_in_latitude = Column(Float, nullable=True)
     check_in_longitude = Column(Float, nullable=True)
+    check_out_latitude = Column(Float, nullable=True)
+    check_out_longitude = Column(Float, nullable=True)
     distance_from_office_meters = Column(Float, nullable=True)
     snapshot_url = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=get_utc_now)
 
     __table_args__ = (
         UniqueConstraint("user_id", "date", name="uq_user_attendance_date"),
+        Index("ix_attendance_tenant_date_late", "tenant_id", "date", "is_late"),
     )
 
     tenant = relationship("Tenant", back_populates="attendance_records")

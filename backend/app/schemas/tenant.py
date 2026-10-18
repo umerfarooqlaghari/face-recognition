@@ -23,7 +23,17 @@ class TenantResponse(BaseModel):
     slug: str
     domain: Optional[str] = None
     is_active: bool
+    default_timezone: str = "UTC"
+    default_work_start_time: str = "09:00"
+    default_work_end_time: str = "18:00"
+    default_grace_period_minutes: int = 15
     created_at: datetime
+
+class TenantTimingsUpdateRequest(BaseModel):
+    default_timezone: Optional[str] = None
+    default_work_start_time: Optional[str] = None
+    default_work_end_time: Optional[str] = None
+    default_grace_period_minutes: Optional[int] = None
 
 class OfficeCreateRequest(BaseModel):
     name: str
@@ -31,6 +41,16 @@ class OfficeCreateRequest(BaseModel):
     longitude: float
     radius_meters: Optional[int] = 200
     address: Optional[str] = None
+    timezone: Optional[str] = "UTC"
+    work_start_time: Optional[str] = "09:00"
+    work_end_time: Optional[str] = "18:00"
+    grace_period_minutes: Optional[int] = 15
+
+class OfficeTimingsUpdateRequest(BaseModel):
+    timezone: Optional[str] = None
+    work_start_time: Optional[str] = None
+    work_end_time: Optional[str] = None
+    grace_period_minutes: Optional[int] = None
 
 class OfficeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -42,6 +62,24 @@ class OfficeResponse(BaseModel):
     longitude: float
     radius_meters: int
     address: Optional[str] = None
+    timezone: str = "UTC"
+    work_start_time: str = "09:00"
+    work_end_time: str = "18:00"
+    grace_period_minutes: int = 15
+
+class EmployeeShiftUpdateRequest(BaseModel):
+    custom_work_start_time: Optional[str] = None
+    custom_work_end_time: Optional[str] = None
+    custom_grace_period_minutes: Optional[int] = None
+    shift_name: Optional[str] = None
+    custom_timezone: Optional[str] = None
+    clear_custom_shift: Optional[bool] = False
+
+    # Aliases for client compatibility
+    work_start_time: Optional[str] = None
+    work_end_time: Optional[str] = None
+    grace_period_minutes: Optional[int] = None
+    timezone: Optional[str] = None
 
 class EmployeeCreateRequest(BaseModel):
     full_name: Optional[str] = None
@@ -56,6 +94,12 @@ class EmployeeCreateRequest(BaseModel):
     office_id: Optional[uuid.UUID] = None
     manager_id: Optional[uuid.UUID] = None
     role: Optional[str] = "employee"
+    custom_work_start_time: Optional[str] = None
+    custom_work_end_time: Optional[str] = None
+    custom_grace_period_minutes: Optional[int] = None
+    shift_name: Optional[str] = None
+    custom_timezone: Optional[str] = None
+
 
 class EmployeeUpdateRequest(BaseModel):
     full_name: Optional[str] = None

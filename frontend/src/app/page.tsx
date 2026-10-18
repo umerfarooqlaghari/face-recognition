@@ -207,6 +207,12 @@ const ArrowLeftIcon = ({ size = 16, color = "currentColor" }: { size?: number; c
   </svg>
 );
 
+const ChevronLeftIcon = ({ size = 16, color = "currentColor" }: { size?: number; color?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="15 18 9 12 15 6" />
+  </svg>
+);
+
 const ChevronRightIcon = ({ size = 16, color = "currentColor" }: { size?: number; color?: string }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="9 18 15 12 9 6" />
@@ -373,6 +379,48 @@ export default function Home() {
   const [newOfficeRadius, setNewOfficeRadius] = useState("200");
   const [newOfficeAddress, setNewOfficeAddress] = useState("");
 
+  // Attendance Calendar Modal State
+  const [showCalendarModal, setShowCalendarModal] = useState(false);
+  const [calendarEmployee, setCalendarEmployee] = useState<any | null>(null);
+  const [calendarYear, setCalendarYear] = useState<number>(2026);
+  const [calendarMonth, setCalendarMonth] = useState<number>(10);
+  const [calendarData, setCalendarData] = useState<any | null>(null);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+
+  // Employee Shift Override Modal State
+  const [showShiftModal, setShowShiftModal] = useState(false);
+  const [shiftEmployee, setShiftEmployee] = useState<any | null>(null);
+  const [shiftName, setShiftName] = useState("");
+  const [shiftStartTime, setShiftStartTime] = useState("09:00");
+  const [shiftEndTime, setShiftEndTime] = useState("18:00");
+  const [shiftGraceMinutes, setShiftGraceMinutes] = useState(15);
+  const [shiftTimezone, setShiftTimezone] = useState("Asia/Karachi");
+  const [shiftIsCustom, setShiftIsCustom] = useState(true);
+  const [shiftSaving, setShiftSaving] = useState(false);
+
+  // Tenant / Company Timings State
+  const [defaultWorkStartTime, setDefaultWorkStartTime] = useState("09:00");
+  const [defaultWorkEndTime, setDefaultWorkEndTime] = useState("18:00");
+  const [defaultGracePeriodMinutes, setDefaultGracePeriodMinutes] = useState(15);
+  const [defaultTimezone, setDefaultTimezone] = useState("Asia/Karachi");
+  const [tenantTimingsSaving, setTenantTimingsSaving] = useState(false);
+
+  // Office Timings Modal State
+  const [showOfficeTimingsModal, setShowOfficeTimingsModal] = useState(false);
+  const [selectedOfficeForTiming, setSelectedOfficeForTiming] = useState<any | null>(null);
+  const [officeTimingStart, setOfficeTimingStart] = useState("09:00");
+  const [officeTimingEnd, setOfficeTimingEnd] = useState("18:00");
+  const [officeTimingGrace, setOfficeTimingGrace] = useState(15);
+  const [officeTimingTimezone, setOfficeTimingTimezone] = useState("Asia/Karachi");
+  const [officeTimingSaving, setOfficeTimingSaving] = useState(false);
+
+  // Batch Late Digest State
+  const [lateDigestSending, setLateDigestSending] = useState(false);
+
+  // Self Attendance (Web Check-Out)
+  const [myTodayAttendance, setMyTodayAttendance] = useState<any | null>(null);
+  const [checkingOutSelf, setCheckingOutSelf] = useState(false);
+
   // Feedback Toasts & Loading States
   const [loading, setLoading] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
@@ -390,6 +438,8 @@ export default function Home() {
     const todayStr = today.toISOString().split("T")[0];
     setRegDate(todayStr);
     setLeaveStartDate(todayStr);
+    setCalendarYear(today.getFullYear());
+    setCalendarMonth(today.getMonth() + 1);
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     setLeaveEndDate(tomorrow.toISOString().split("T")[0]);
@@ -422,6 +472,7 @@ export default function Home() {
     fetchTimesheets();
     fetchOffices();
     fetchBillingStatus();
+    fetchTodayAttendance();
   };
 
   const fetchTenantStats = async () => {
@@ -432,9 +483,264 @@ export default function Home() {
       if (res.ok) {
         const data = await res.json();
         setTenantStats(data);
+        if (data.default_work_start_time) setDefaultWorkStartTime(data.default_work_start_time);
+        if (data.default_work_end_time) setDefaultWorkEndTime(data.default_work_end_time);
+        if (data.default_grace_period_minutes != null) setDefaultGracePeriodMinutes(data.default_grace_period_minutes);
+        if (data.default_timezone) setDefaultTimezone(data.default_timezone);
       }
     } catch {
       // ignore
+    }
+  };
+
+  const fetchTodayAttendance = async () => {
+    const rawUser = localStorage.getItem("attend_user");
+    let uId = user?.id;
+    if (!uId && rawUser) {
+      try {
+        uId = JSON.parse(rawUser)?.id;
+      } catch {}
+    }
+    if (!uId) return;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/attendance/today/${uId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMyTodayAttendance(data);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleWebCheckOut = async () => {
+    try {
+      setCheckingOutSelf(true);
+      const res = await fetch(`${API_BASE_URL}/attendance/check-out`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to check out");
+      }
+      showToast(
+        data.hours_worked != null
+          ? `Checked out successfully! Total worked: ${data.hours_worked} hrs.`
+          : "Checked out successfully!"
+      );
+      fetchTodayAttendance();
+      fetchTimesheets();
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setCheckingOutSelf(false);
+    }
+  };
+
+  const fetchCalendar = async (userId: string, year: number, month: number) => {
+    try {
+      setCalendarLoading(true);
+      const res = await fetch(`${API_BASE_URL}/attendance/calendar/${userId}?year=${year}&month=${month}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to load employee attendance calendar");
+      }
+      setCalendarData(data);
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setCalendarLoading(false);
+    }
+  };
+
+  const handleOpenCalendar = (emp: any) => {
+    setCalendarEmployee(emp);
+    const now = new Date();
+    const curYear = now.getFullYear();
+    const curMonth = now.getMonth() + 1;
+    setCalendarYear(curYear);
+    setCalendarMonth(curMonth);
+    setShowCalendarModal(true);
+    fetchCalendar(emp.id, curYear, curMonth);
+  };
+
+  const handlePrevMonth = () => {
+    if (!calendarEmployee) return;
+    let nextMonth = calendarMonth - 1;
+    let nextYear = calendarYear;
+    if (nextMonth < 1) {
+      nextMonth = 12;
+      nextYear -= 1;
+    }
+    setCalendarYear(nextYear);
+    setCalendarMonth(nextMonth);
+    fetchCalendar(calendarEmployee.id, nextYear, nextMonth);
+  };
+
+  const handleNextMonth = () => {
+    if (!calendarEmployee) return;
+    let nextMonth = calendarMonth + 1;
+    let nextYear = calendarYear;
+    if (nextMonth > 12) {
+      nextMonth = 1;
+      nextYear += 1;
+    }
+    setCalendarYear(nextYear);
+    setCalendarMonth(nextMonth);
+    fetchCalendar(calendarEmployee.id, nextYear, nextMonth);
+  };
+
+  const handleOpenShiftModal = (emp: any) => {
+    setShiftEmployee(emp);
+    const shift = emp.shift_config || {};
+    setShiftIsCustom(shift.is_custom ?? false);
+    setShiftName(shift.shift_name || "");
+    setShiftStartTime(shift.work_start_time || defaultWorkStartTime || "09:00");
+    setShiftEndTime(shift.work_end_time || defaultWorkEndTime || "18:00");
+    setShiftGraceMinutes(shift.grace_period_minutes ?? defaultGracePeriodMinutes ?? 15);
+    setShiftTimezone(shift.timezone || defaultTimezone || "Asia/Karachi");
+    setShowShiftModal(true);
+  };
+
+  const handleSaveShift = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!shiftEmployee) return;
+    try {
+      setShiftSaving(true);
+      const payload = shiftIsCustom
+        ? {
+            shift_name: shiftName.trim() || "Custom Shift",
+            work_start_time: shiftStartTime,
+            work_end_time: shiftEndTime,
+            grace_period_minutes: Number(shiftGraceMinutes),
+            timezone: shiftTimezone,
+          }
+        : {
+            shift_name: null,
+            work_start_time: null,
+            work_end_time: null,
+            grace_period_minutes: null,
+            timezone: null,
+          };
+      const res = await fetch(`${API_BASE_URL}/management/employees/${shiftEmployee.id}/shift`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to update employee shift");
+      }
+      showToast(`Updated shift timing for ${shiftEmployee.full_name}.`);
+      setShowShiftModal(false);
+      fetchEmployees();
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setShiftSaving(false);
+    }
+  };
+
+  const handleSaveTenantTimings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setTenantTimingsSaving(true);
+      const res = await fetch(`${API_BASE_URL}/management/tenant/timings`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          default_timezone: defaultTimezone,
+          default_work_start_time: defaultWorkStartTime,
+          default_work_end_time: defaultWorkEndTime,
+          default_grace_period_minutes: Number(defaultGracePeriodMinutes),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to update company office timings");
+      }
+      showToast("Company default office timings & grace period saved.");
+      fetchTenantStats();
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setTenantTimingsSaving(false);
+    }
+  };
+
+  const handleOpenOfficeTimingModal = (office: any) => {
+    setSelectedOfficeForTiming(office);
+    setOfficeTimingStart(office.work_start_time || defaultWorkStartTime || "09:00");
+    setOfficeTimingEnd(office.work_end_time || defaultWorkEndTime || "18:00");
+    setOfficeTimingGrace(office.grace_period_minutes ?? defaultGracePeriodMinutes ?? 15);
+    setOfficeTimingTimezone(office.timezone || defaultTimezone || "Asia/Karachi");
+    setShowOfficeTimingsModal(true);
+  };
+
+  const handleSaveOfficeTimings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedOfficeForTiming) return;
+    try {
+      setOfficeTimingSaving(true);
+      const res = await fetch(`${API_BASE_URL}/management/offices/${selectedOfficeForTiming.id}/timings`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          work_start_time: officeTimingStart,
+          work_end_time: officeTimingEnd,
+          grace_period_minutes: Number(officeTimingGrace),
+          timezone: officeTimingTimezone,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to update office timing");
+      }
+      showToast(`Campus "${selectedOfficeForTiming.name}" timings updated.`);
+      setShowOfficeTimingsModal(false);
+      fetchOffices();
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setOfficeTimingSaving(false);
+    }
+  };
+
+  const handleSendLateDigest = async () => {
+    try {
+      setLateDigestSending(true);
+      const res = await fetch(`${API_BASE_URL}/attendance/send-late-digest`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to dispatch late arrivals digest");
+      }
+      showToast(data.message || `Dispatched late arrivals digest (${data.late_employees_count} late employees).`);
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setLateDigestSending(false);
     }
   };
 
@@ -953,8 +1259,8 @@ export default function Home() {
         statusVal === "bypass"
           ? "Leave approved directly via Admin Bypass (skipping Level 1)."
           : statusVal === "approved"
-          ? "Leave approval updated."
-          : `Leave application marked as ${statusVal}.`
+            ? "Leave approval updated."
+            : `Leave application marked as ${statusVal}.`
       );
       fetchLeaves();
       fetchTimesheets();
@@ -1853,7 +2159,7 @@ export default function Home() {
                       marginTop: 6,
                     }}
                   >
-                    {loading ? "Initializing..." : "Create Organization (14 Days Free)"}
+                    {loading ? "Initializing..." : "Create Organization"}
                   </button>
                 </form>
               )}
@@ -2108,7 +2414,7 @@ export default function Home() {
               <div style={{ fontSize: 13, color: "#64748b", lineHeight: 1.5 }}>
                 <strong>Alpha Software Development Limited</strong><br />
                 Registered in England & Wales<br />
-                Contact: <a href="mailto:support@alpha-devs.cloud" style={{ color: "#4f46e5" }}>support@alpha-devs.cloud</a>
+                Contact: <a href="mailto:info@alpha-devs.cloud" style={{ color: "#4f46e5" }}>info@alpha-devs.cloud</a>
               </div>
             </div>
           </div>
@@ -2125,9 +2431,8 @@ export default function Home() {
 
         {toastMessage && (
           <div
-            className={`${styles.toast} ${
-              toastMessage.type === "success" ? styles.toastSuccess : styles.toastError
-            }`}
+            className={`${styles.toast} ${toastMessage.type === "success" ? styles.toastSuccess : styles.toastError
+              }`}
           >
             {toastMessage.type === "success" ? (
               <CheckCircleIcon size={18} color="#34d399" />
@@ -2147,11 +2452,11 @@ export default function Home() {
 
   const initials = user?.full_name
     ? user.full_name
-        .split(" ")
-        .map((n: string) => n[0])
-        .join("")
-        .toUpperCase()
-        .slice(0, 2)
+      .split(" ")
+      .map((n: string) => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2)
     : "AD";
 
   return (
@@ -2178,6 +2483,26 @@ export default function Home() {
         </div>
 
         <div className={styles.navRight}>
+          {myTodayAttendance?.has_checked_in && (
+            myTodayAttendance?.has_checked_out ? (
+              <span className={styles.badgeSuccess} style={{ fontSize: 11, padding: "5px 10px" }}>
+                <CheckCircleIcon size={12} color="#34d399" />
+                <span>Checked Out ({myTodayAttendance.record?.hours_worked ?? "—"}h)</span>
+              </span>
+            ) : (
+              <button
+                className={styles.btnWarning}
+                onClick={handleWebCheckOut}
+                disabled={checkingOutSelf}
+                title="Record your daily checkout time"
+                style={{ padding: "5px 12px" }}
+              >
+                <ClockIcon size={13} color="#d97706" />
+                <span>{checkingOutSelf ? "Checking Out..." : "Check Out for the Day"}</span>
+              </button>
+            )
+          )}
+
           <div className={styles.tenantBadge}>
             <BuildingIcon size={14} color="#818cf8" />
             <span>{tenantStats?.tenant?.slug || "Organization"}</span>
@@ -2357,6 +2682,15 @@ export default function Home() {
               <>
                 <button
                   className={styles.btnSecondary}
+                  onClick={handleSendLateDigest}
+                  disabled={lateDigestSending}
+                  title="Dispatch batch email notification to HR summarizing all employees who checked in late today"
+                >
+                  <MailIcon size={16} color="#d97706" />
+                  <span>{lateDigestSending ? "Dispatching..." : "Send Late Digest Today"}</span>
+                </button>
+                <button
+                  className={styles.btnSecondary}
                   onClick={() => {
                     handleImportReset();
                     setShowImportModal(true);
@@ -2525,11 +2859,11 @@ export default function Home() {
                             >
                               {emp.full_name
                                 ? emp.full_name
-                                    .split(" ")
-                                    .map((n: string) => n[0])
-                                    .join("")
-                                    .slice(0, 2)
-                                    .toUpperCase()
+                                  .split(" ")
+                                  .map((n: string) => n[0])
+                                  .join("")
+                                  .slice(0, 2)
+                                  .toUpperCase()
                                 : "EM"}
                             </div>
                             <div>
@@ -2540,6 +2874,16 @@ export default function Home() {
                               <div style={{ fontSize: 11, color: "#64748b", marginTop: 1 }}>
                                 {emp.email}{emp.phone_number ? ` • ${emp.phone_number}` : ""}
                               </div>
+                              {emp.shift_config?.is_custom ? (
+                                <div style={{ marginTop: 3 }}>
+                                  <span className={styles.badgeCyan} style={{ fontSize: 10, padding: "1px 6px" }}>
+                                    <ClockIcon size={10} />
+                                    <span>
+                                      {emp.shift_config.shift_name || "Custom Shift"} ({emp.shift_config.work_start_time} - {emp.shift_config.work_end_time})
+                                    </span>
+                                  </span>
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                         </td>
@@ -2617,7 +2961,25 @@ export default function Home() {
                           )}
                         </td>
                         <td className={styles.td} style={{ textAlign: "right" }}>
-                          <div style={{ display: "inline-flex", gap: 6 }}>
+                          <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                            <button
+                              className={styles.btnSecondary}
+                              onClick={() => handleOpenCalendar(emp)}
+                              title="View Monthly Attendance Calendar & Hours"
+                            >
+                              <CalendarIcon size={13} color="#0284c7" />
+                              <span>Calendar</span>
+                            </button>
+
+                            <button
+                              className={styles.btnSecondary}
+                              onClick={() => handleOpenShiftModal(emp)}
+                              title="Configure Working Hours, Shift & Grace Period"
+                            >
+                              <ClockIcon size={13} color="#0284c7" />
+                              <span>Shift</span>
+                            </button>
+
                             <button
                               className={styles.btnSecondary}
                               onClick={() => {
@@ -3151,9 +3513,9 @@ export default function Home() {
                           <span style={{ fontFamily: "monospace" }}>
                             {t.check_in_time
                               ? new Date(t.check_in_time).toLocaleTimeString([], {
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                })
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })
                               : "N/A"}
                           </span>
                           {t.distance_from_office_meters !== null &&
@@ -3167,9 +3529,9 @@ export default function Home() {
                           <span style={{ fontFamily: "monospace" }}>
                             {t.check_out_time
                               ? new Date(t.check_out_time).toLocaleTimeString([], {
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                })
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })
                               : "In Progress"}
                           </span>
                         </td>
@@ -3234,103 +3596,203 @@ export default function Home() {
         {/* TAB 5: OFFICE GEOFENCES                                                   */}
         {/* ========================================================================= */}
         {activeTab === "offices" && (
-          <div className={styles.tableCard}>
-            <div className={styles.tableToolbar}>
-              <div className={styles.tableTitle}>
-                <BuildingIcon size={18} color="#818cf8" />
-                <span>Configured Campus Office Geofences (200-Meter Permitted Radii)</span>
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            {/* Organization Default Timings & Grace Period Settings Card */}
+            <div className={styles.timingCard}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, borderBottom: "1px solid #f1f5f9", paddingBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <ClockIcon size={18} color="#0284c7" />
+                  <div>
+                    <span style={{ fontSize: 16, fontWeight: 700, color: "#0f172a" }}>Company Default Working Hours & Grace Period</span>
+                    <p style={{ fontSize: 12, color: "#64748b", margin: "2px 0 0 0" }}>
+                      Applies automatically across all employees as the organization baseline. Regional office campuses and individual night/custom shifts can override this.
+                    </p>
+                  </div>
+                </div>
               </div>
 
-              <div className={styles.toolbarActions}>
-                <button className={styles.btnSecondary} onClick={fetchOffices} title="Refresh Offices">
-                  <RefreshIcon size={14} />
-                  <span>Refresh</span>
-                </button>
-              </div>
+              <form onSubmit={handleSaveTenantTimings}>
+                <div className={styles.timingGrid}>
+                  <div className={styles.formGroup}>
+                    <label className={styles.label}>Default Start Time</label>
+                    <input
+                      type="time"
+                      required
+                      className={styles.input}
+                      value={defaultWorkStartTime}
+                      onChange={(e) => setDefaultWorkStartTime(e.target.value)}
+                    />
+                  </div>
+
+                  <div className={styles.formGroup}>
+                    <label className={styles.label}>Default End Time</label>
+                    <input
+                      type="time"
+                      required
+                      className={styles.input}
+                      value={defaultWorkEndTime}
+                      onChange={(e) => setDefaultWorkEndTime(e.target.value)}
+                    />
+                  </div>
+
+                  <div className={styles.formGroup}>
+                    <label className={styles.label}>Grace Period (Minutes)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="120"
+                      required
+                      className={styles.input}
+                      value={defaultGracePeriodMinutes}
+                      onChange={(e) => setDefaultGracePeriodMinutes(parseInt(e.target.value, 10) || 0)}
+                    />
+                  </div>
+
+                  <div className={styles.formGroup}>
+                    <label className={styles.label}>Company Regional Timezone</label>
+                    <select
+                      className={styles.select}
+                      value={defaultTimezone}
+                      onChange={(e) => setDefaultTimezone(e.target.value)}
+                    >
+                      <option value="Asia/Karachi">Asia/Karachi (PKT, UTC+5)</option>
+                      <option value="America/New_York">America/New_York (EST/EDT)</option>
+                      <option value="America/Chicago">America/Chicago (CST/CDT)</option>
+                      <option value="America/Los_Angeles">America/Los_Angeles (PST/PDT)</option>
+                      <option value="Europe/London">Europe/London (GMT/BST)</option>
+                      <option value="Europe/Berlin">Europe/Berlin (CET)</option>
+                      <option value="Asia/Dubai">Asia/Dubai (GST, UTC+4)</option>
+                      <option value="Asia/Kolkata">Asia/Kolkata (IST, UTC+5:30)</option>
+                      <option value="Asia/Singapore">Asia/Singapore (SGT, UTC+8)</option>
+                      <option value="Asia/Tokyo">Asia/Tokyo (JST, UTC+9)</option>
+                      <option value="Australia/Sydney">Australia/Sydney (AEST)</option>
+                      <option value="UTC">UTC (Universal)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+                  <button type="submit" disabled={tenantTimingsSaving} className={styles.btnPrimary}>
+                    <CheckCircleIcon size={16} />
+                    <span>{tenantTimingsSaving ? "Saving Timings..." : "Save Company Default Timings"}</span>
+                  </button>
+                </div>
+              </form>
             </div>
 
-            <div className={styles.tableWrapper}>
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th className={styles.th}>Office Campus</th>
-                    <th className={styles.th}>Latitude</th>
-                    <th className={styles.th}>Longitude</th>
-                    <th className={styles.th}>Geofence Radius</th>
-                    <th className={styles.th}>Address / Location</th>
-                    <th className={styles.th}>Status</th>
-                    <th className={styles.th} style={{ textAlign: "right" }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {offices.length === 0 ? (
+            <div className={styles.tableCard}>
+              <div className={styles.tableToolbar}>
+                <div className={styles.tableTitle}>
+                  <BuildingIcon size={18} color="#818cf8" />
+                  <span>Configured Campus Office Geofences & Regional Hours</span>
+                </div>
+
+                <div className={styles.toolbarActions}>
+                  <button className={styles.btnSecondary} onClick={fetchOffices} title="Refresh Offices">
+                    <RefreshIcon size={14} />
+                    <span>Refresh</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className={styles.tableWrapper}>
+                <table className={styles.table}>
+                  <thead>
                     <tr>
-                      <td colSpan={7}>
-                        <div className={styles.emptyState}>
-                          <div className={styles.emptyIcon}>
-                            <BuildingIcon size={32} />
-                          </div>
-                          <div className={styles.emptyTitle}>No Office Locations Configured</div>
-                          <p className={styles.emptyDesc}>
-                            Define your office locations with GPS coordinates and radius to gate on-site attendance.
-                          </p>
-                          <button className={styles.btnPrimary} onClick={() => setShowOfficeModal(true)}>
-                            <PlusIcon size={16} />
-                            <span>Add First Campus Geofence</span>
-                          </button>
-                        </div>
-                      </td>
+                      <th className={styles.th}>Office Campus</th>
+                      <th className={styles.th}>Latitude / Longitude</th>
+                      <th className={styles.th}>Geofence Radius</th>
+                      <th className={styles.th}>Campus Working Hours</th>
+                      <th className={styles.th}>Address / Location</th>
+                      <th className={styles.th}>Status</th>
+                      <th className={styles.th} style={{ textAlign: "right" }}>Actions</th>
                     </tr>
-                  ) : (
-                    offices.map((off) => (
-                      <tr key={off.id} className={styles.tr}>
-                        <td className={styles.td}>
-                          <div style={{ fontWeight: 600, color: "#ffffff" }}>{off.name}</div>
-                        </td>
-                        <td className={styles.td} style={{ fontFamily: "monospace" }}>
-                          {off.latitude.toFixed(5)}
-                        </td>
-                        <td className={styles.td} style={{ fontFamily: "monospace" }}>
-                          {off.longitude.toFixed(5)}
-                        </td>
-                        <td className={styles.td}>
-                          <span className={styles.badgeInfo}>
-                            {off.radius_meters} Meters Circle
-                          </span>
-                        </td>
-                        <td className={styles.td}>{off.address || "Main Site"}</td>
-                        <td className={styles.td}>
-                          <span className={styles.badgeSuccess}>
-                            <CheckCircleIcon size={12} color="#34d399" />
-                            <span>Active Geofence</span>
-                          </span>
-                        </td>
-                        <td className={styles.td} style={{ textAlign: "right" }}>
-                          <div style={{ display: "inline-flex", gap: 6 }}>
-                            <a
-                              href={`https://www.openstreetmap.org/?mlat=${off.latitude}&mlon=${off.longitude}#map=16/${off.latitude}/${off.longitude}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className={styles.btnSecondary}
-                              title="Inspect Pin on Map"
-                            >
-                              <LocationPinIcon size={12} />
-                              <span>Inspect Map</span>
-                            </a>
-                            <button
-                              className={styles.btnDanger}
-                              onClick={() => handleDeleteOffice(off.id, off.name)}
-                              title="Remove Office Location"
-                            >
-                              <TrashIcon size={12} />
+                  </thead>
+                  <tbody>
+                    {offices.length === 0 ? (
+                      <tr>
+                        <td colSpan={7}>
+                          <div className={styles.emptyState}>
+                            <div className={styles.emptyIcon}>
+                              <BuildingIcon size={32} />
+                            </div>
+                            <div className={styles.emptyTitle}>No Office Locations Configured</div>
+                            <p className={styles.emptyDesc}>
+                              Define your office locations with GPS coordinates and radius to gate on-site attendance.
+                            </p>
+                            <button className={styles.btnPrimary} onClick={() => setShowOfficeModal(true)}>
+                              <PlusIcon size={16} />
+                              <span>Add First Campus Geofence</span>
                             </button>
                           </div>
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                    ) : (
+                      offices.map((off) => (
+                        <tr key={off.id} className={styles.tr}>
+                          <td className={styles.td}>
+                            <div style={{ fontWeight: 600, color: "#0f172a" }}>{off.name}</div>
+                          </td>
+                          <td className={styles.td} style={{ fontFamily: "monospace", fontSize: 12 }}>
+                            {off.latitude.toFixed(5)}, {off.longitude.toFixed(5)}
+                          </td>
+                          <td className={styles.td}>
+                            <span className={styles.badgeInfo}>
+                              {off.radius_meters} Meters Circle
+                            </span>
+                          </td>
+                          <td className={styles.td}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                              <span style={{ fontWeight: 600, color: "#0f172a", fontSize: 12 }}>
+                                {off.work_start_time || defaultWorkStartTime || "09:00"} - {off.work_end_time || defaultWorkEndTime || "18:00"}
+                              </span>
+                              <span style={{ fontSize: 11, color: "#64748b" }}>
+                                {off.grace_period_minutes ?? defaultGracePeriodMinutes ?? 15}m grace • {off.timezone || defaultTimezone || "Local"}
+                              </span>
+                            </div>
+                          </td>
+                          <td className={styles.td}>{off.address || "Main Site"}</td>
+                          <td className={styles.td}>
+                            <span className={styles.badgeSuccess}>
+                              <CheckCircleIcon size={12} color="#34d399" />
+                              <span>Active Geofence</span>
+                            </span>
+                          </td>
+                          <td className={styles.td} style={{ textAlign: "right" }}>
+                            <div style={{ display: "inline-flex", gap: 6 }}>
+                              <button
+                                className={styles.btnSecondary}
+                                onClick={() => handleOpenOfficeTimingModal(off)}
+                                title="Edit Office Campus Working Hours & Grace Period"
+                              >
+                                <ClockIcon size={12} color="#0284c7" />
+                                <span>Timings</span>
+                              </button>
+                              <a
+                                href={`https://www.openstreetmap.org/?mlat=${off.latitude}&mlon=${off.longitude}#map=16/${off.latitude}/${off.longitude}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className={styles.btnSecondary}
+                                title="Inspect Pin on Map"
+                              >
+                                <LocationPinIcon size={12} />
+                                <span>Map</span>
+                              </a>
+                              <button
+                                className={styles.btnDanger}
+                                onClick={() => handleDeleteOffice(off.id, off.name)}
+                                title="Remove Office Location"
+                              >
+                                <TrashIcon size={12} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
@@ -4372,8 +4834,8 @@ export default function Home() {
                             background: !row.valid
                               ? "rgba(254, 242, 242, 0.5)"
                               : row.is_duplicate
-                              ? "rgba(255, 251, 235, 0.5)"
-                              : "#ffffff",
+                                ? "rgba(255, 251, 235, 0.5)"
+                                : "#ffffff",
                           }}
                         >
                           <td style={{ padding: "8px 12px", fontFamily: "monospace", color: "#64748b" }}>{row.row}</td>
@@ -5238,12 +5700,432 @@ export default function Home() {
         </div>
       )}
 
+      {/* ========================================================================= */}
+      {/* MODAL 6: EMPLOYEE ATTENDANCE CALENDAR VIEW                                */}
+      {/* ========================================================================= */}
+      {showCalendarModal && calendarEmployee && (
+        <div className={styles.modalBackdrop}>
+          <div className={styles.modalCardLarge}>
+            <div className={styles.modalHeader}>
+              <div className={styles.modalTitle}>
+                <CalendarIcon size={20} color="#0284c7" />
+                <span>
+                  Attendance Calendar • {calendarEmployee.full_name} ({calendarEmployee.employee_code})
+                </span>
+              </div>
+              <button className={styles.modalClose} onClick={() => setShowCalendarModal(false)}>
+                <CloseIcon size={18} />
+              </button>
+            </div>
+
+            <div className={styles.modalBody}>
+              {/* Month Navigation & Shift info */}
+              <div className={styles.calendarControls}>
+                <div className={styles.calendarNavGroup}>
+                  <button type="button" className={styles.btnSecondary} onClick={handlePrevMonth} title="Previous Month">
+                    <ChevronLeftIcon size={16} />
+                  </button>
+                  <span style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", minWidth: 150, textAlign: "center" }}>
+                    {calendarData?.month_name || `${calendarYear}-${String(calendarMonth).padStart(2, "0")}`}
+                  </span>
+                  <button type="button" className={styles.btnSecondary} onClick={handleNextMonth} title="Next Month">
+                    <ChevronRightIcon size={16} />
+                  </button>
+                </div>
+
+                <div style={{ fontSize: 12, color: "#64748b" }}>
+                  <span>Shift: </span>
+                  <strong style={{ color: "#0f172a" }}>
+                    {calendarData?.resolved_shift?.shift_name || "Office Shift"} (
+                    {calendarData?.resolved_shift?.work_start_time || "09:00"} -{" "}
+                    {calendarData?.resolved_shift?.work_end_time || "18:00"})
+                  </strong>
+                  <span> • {calendarData?.resolved_shift?.grace_period_minutes ?? 15}m grace ({calendarData?.timezone || "UTC"})</span>
+                </div>
+              </div>
+
+              {/* Monthly Executive Summary Metrics */}
+              {calendarData?.summary && (
+                <div className={styles.calendarMetricsGrid}>
+                  <div className={styles.calendarMetricCard}>
+                    <span className={styles.calendarMetricLabel}>Present Days</span>
+                    <span className={styles.calendarMetricValue} style={{ color: "#059669" }}>
+                      {calendarData.summary.days_present}
+                    </span>
+                  </div>
+                  <div className={styles.calendarMetricCard}>
+                    <span className={styles.calendarMetricLabel}>Late Check-Ins</span>
+                    <span className={styles.calendarMetricValue} style={{ color: "#d97706" }}>
+                      {calendarData.summary.days_late}
+                    </span>
+                  </div>
+                  <div className={styles.calendarMetricCard}>
+                    <span className={styles.calendarMetricLabel}>Absences</span>
+                    <span className={styles.calendarMetricValue} style={{ color: "#dc2626" }}>
+                      {calendarData.summary.days_absent}
+                    </span>
+                  </div>
+                  <div className={styles.calendarMetricCard}>
+                    <span className={styles.calendarMetricLabel}>Approved Leaves</span>
+                    <span className={styles.calendarMetricValue} style={{ color: "#7c3aed" }}>
+                      {calendarData.summary.days_on_leave}
+                    </span>
+                  </div>
+                  <div className={styles.calendarMetricCard}>
+                    <span className={styles.calendarMetricLabel}>Hours Worked</span>
+                    <span className={styles.calendarMetricValue} style={{ color: "#0284c7" }}>
+                      {calendarData.summary.total_hours_worked}h
+                    </span>
+                  </div>
+                  <div className={styles.calendarMetricCard}>
+                    <span className={styles.calendarMetricLabel}>On-Time Arrival</span>
+                    <span className={styles.calendarMetricValue} style={{ color: "#0f172a" }}>
+                      {calendarData.summary.on_time_rate_pct}%
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Calendar Grid */}
+              {calendarLoading ? (
+                <div style={{ textAlign: "center", padding: "40px 0", color: "#64748b" }}>
+                  <RefreshIcon size={24} />
+                  <p style={{ marginTop: 8 }}>Loading Monthly Attendance Calendar...</p>
+                </div>
+              ) : (
+                <>
+                  <div className={styles.calendarWeekdayHeader}>
+                    {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((w) => (
+                      <div key={w} className={styles.calendarWeekdayCol}>{w}</div>
+                    ))}
+                  </div>
+
+                  <div className={styles.calendarMonthGrid}>
+                    {/* Fill leading blank days based on first day weekday */}
+                    {calendarData?.days && calendarData.days.length > 0 && (() => {
+                      const firstDate = new Date(`${calendarData.days[0].date}T00:00:00`);
+                      const dayOfWeek = (firstDate.getDay() + 6) % 7; // Monday = 0
+                      const blanks = [];
+                      for (let i = 0; i < dayOfWeek; i++) {
+                        blanks.push(<div key={`blank-${i}`} style={{ opacity: 0.2 }} className={styles.calendarDayCell} />);
+                      }
+                      return blanks;
+                    })()}
+
+                    {calendarData?.days?.map((day: any) => {
+                      const isToday = day.date === regDate;
+
+                      let badgeClass = styles.statusBadgeWeekend;
+                      if (day.status === "present") badgeClass = styles.statusBadgePresent;
+                      else if (day.status === "late") badgeClass = styles.statusBadgeLate;
+                      else if (day.status === "absent") badgeClass = styles.statusBadgeAbsent;
+                      else if (day.status === "leave") badgeClass = styles.statusBadgeLeave;
+
+                      return (
+                        <div
+                          key={day.date}
+                          className={`${styles.calendarDayCell} ${day.is_weekend ? styles.calendarDayCellWeekend : ""} ${isToday ? styles.calendarDayCellToday : ""}`}
+                        >
+                          <div className={styles.calendarDayTop}>
+                            <span className={styles.calendarDayNum}>{day.day_of_month}</span>
+                            {!day.is_future && (
+                              <span className={`${styles.calendarDayStatusBadge} ${badgeClass}`}>
+                                {day.status}
+                              </span>
+                            )}
+                          </div>
+
+                          {!day.is_future && (
+                            <div className={styles.calendarDayTimes}>
+                              {day.check_in_local ? (
+                                <div>
+                                  <div>In: <strong>{day.check_in_local}</strong></div>
+                                  <div>Out: {day.check_out_local || "—"}</div>
+                                  {day.is_late && (
+                                    <div style={{ color: "#d97706", fontSize: 9 }}>+{day.minutes_late}m late</div>
+                                  )}
+                                </div>
+                              ) : day.is_on_leave ? (
+                                <div style={{ color: "#7c3aed" }}>{day.leave_type || "On Leave"}</div>
+                              ) : day.is_weekend ? (
+                                <div style={{ color: "#94a3b8" }}>Weekend</div>
+                              ) : (
+                                <div style={{ color: "#ef4444" }}>No Record</div>
+                              )}
+                            </div>
+                          )}
+
+                          {day.hours_worked != null && day.hours_worked > 0 && (
+                            <div className={styles.calendarDayHours}>
+                              {day.hours_worked} hrs
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className={styles.modalFooter}>
+              <button
+                type="button"
+                className={styles.btnSecondary}
+                onClick={() => setShowCalendarModal(false)}
+              >
+                Close Calendar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 7: EMPLOYEE SHIFT OVERRIDE CONFIGURATION                            */}
+      {/* ========================================================================= */}
+      {showShiftModal && shiftEmployee && (
+        <div className={styles.modalBackdrop}>
+          <div className={styles.modalCard}>
+            <div className={styles.modalHeader}>
+              <div className={styles.modalTitle}>
+                <ClockIcon size={20} color="#0284c7" />
+                <span>Configure Work Shift • {shiftEmployee.full_name}</span>
+              </div>
+              <button className={styles.modalClose} onClick={() => setShowShiftModal(false)}>
+                <CloseIcon size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveShift}>
+              <div className={styles.modalBody}>
+                <div className={styles.formGroup}>
+                  <label className={styles.label}>Shift Assignment Mode</label>
+                  <div style={{ display: "flex", gap: 14, marginTop: 4 }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+                      <input
+                        type="radio"
+                        name="shiftMode"
+                        checked={!shiftIsCustom}
+                        onChange={() => setShiftIsCustom(false)}
+                      />
+                      <span>Use Campus / Office Default</span>
+                    </label>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+                      <input
+                        type="radio"
+                        name="shiftMode"
+                        checked={shiftIsCustom}
+                        onChange={() => setShiftIsCustom(true)}
+                      />
+                      <span>Custom Shift (e.g. Night Shift)</span>
+                    </label>
+                  </div>
+                </div>
+
+                {shiftIsCustom ? (
+                  <>
+                    <div className={styles.formGroup}>
+                      <label className={styles.label}>Shift Name</label>
+                      <input
+                        type="text"
+                        className={styles.input}
+                        placeholder="e.g. Night Shift, US Shift, Early Bird"
+                        value={shiftName}
+                        onChange={(e) => setShiftName(e.target.value)}
+                      />
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                      <div className={styles.formGroup}>
+                        <label className={styles.label}>Start Time *</label>
+                        <input
+                          type="time"
+                          required
+                          className={styles.input}
+                          value={shiftStartTime}
+                          onChange={(e) => setShiftStartTime(e.target.value)}
+                        />
+                      </div>
+
+                      <div className={styles.formGroup}>
+                        <label className={styles.label}>End Time *</label>
+                        <input
+                          type="time"
+                          required
+                          className={styles.input}
+                          value={shiftEndTime}
+                          onChange={(e) => setShiftEndTime(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                      <div className={styles.formGroup}>
+                        <label className={styles.label}>Grace Period (Minutes)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="120"
+                          required
+                          className={styles.input}
+                          value={shiftGraceMinutes}
+                          onChange={(e) => setShiftGraceMinutes(parseInt(e.target.value, 10) || 0)}
+                        />
+                      </div>
+
+                      <div className={styles.formGroup}>
+                        <label className={styles.label}>Regional Timezone</label>
+                        <select
+                          className={styles.select}
+                          value={shiftTimezone}
+                          onChange={(e) => setShiftTimezone(e.target.value)}
+                        >
+                          <option value="Asia/Karachi">Asia/Karachi (PKT)</option>
+                          <option value="America/New_York">America/New_York (EST)</option>
+                          <option value="America/Chicago">America/Chicago (CST)</option>
+                          <option value="America/Los_Angeles">America/Los_Angeles (PST)</option>
+                          <option value="Europe/London">Europe/London (GMT)</option>
+                          <option value="Europe/Berlin">Europe/Berlin (CET)</option>
+                          <option value="Asia/Dubai">Asia/Dubai (GST)</option>
+                          <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
+                          <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
+                          <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
+                          <option value="Australia/Sydney">Australia/Sydney (AEST)</option>
+                          <option value="UTC">UTC</option>
+                        </select>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ padding: 14, background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 13, color: "#64748b" }}>
+                    This employee will follow their assigned campus office hours (or organization default) of{" "}
+                    <strong>{defaultWorkStartTime} - {defaultWorkEndTime}</strong> with <strong>{defaultGracePeriodMinutes}m</strong> grace period.
+                  </div>
+                )}
+              </div>
+
+              <div className={styles.modalFooter}>
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  onClick={() => setShowShiftModal(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" disabled={shiftSaving} className={styles.btnPrimary}>
+                  <CheckCircleIcon size={16} />
+                  <span>{shiftSaving ? "Saving..." : "Save Shift Settings"}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 8: REGIONAL OFFICE TIMINGS MODAL                                    */}
+      {/* ========================================================================= */}
+      {showOfficeTimingsModal && selectedOfficeForTiming && (
+        <div className={styles.modalBackdrop}>
+          <div className={styles.modalCard}>
+            <div className={styles.modalHeader}>
+              <div className={styles.modalTitle}>
+                <ClockIcon size={20} color="#0284c7" />
+                <span>Regional Office Timings • {selectedOfficeForTiming.name}</span>
+              </div>
+              <button className={styles.modalClose} onClick={() => setShowOfficeTimingsModal(false)}>
+                <CloseIcon size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveOfficeTimings}>
+              <div className={styles.modalBody}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                  <div className={styles.formGroup}>
+                    <label className={styles.label}>Campus Work Start Time *</label>
+                    <input
+                      type="time"
+                      required
+                      className={styles.input}
+                      value={officeTimingStart}
+                      onChange={(e) => setOfficeTimingStart(e.target.value)}
+                    />
+                  </div>
+
+                  <div className={styles.formGroup}>
+                    <label className={styles.label}>Campus Work End Time *</label>
+                    <input
+                      type="time"
+                      required
+                      className={styles.input}
+                      value={officeTimingEnd}
+                      onChange={(e) => setOfficeTimingEnd(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                  <div className={styles.formGroup}>
+                    <label className={styles.label}>Campus Grace Period (Minutes)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="120"
+                      required
+                      className={styles.input}
+                      value={officeTimingGrace}
+                      onChange={(e) => setOfficeTimingGrace(parseInt(e.target.value, 10) || 0)}
+                    />
+                  </div>
+
+                  <div className={styles.formGroup}>
+                    <label className={styles.label}>Campus Regional Timezone</label>
+                    <select
+                      className={styles.select}
+                      value={officeTimingTimezone}
+                      onChange={(e) => setOfficeTimingTimezone(e.target.value)}
+                    >
+                      <option value="Asia/Karachi">Asia/Karachi (PKT)</option>
+                      <option value="America/New_York">America/New_York (EST)</option>
+                      <option value="America/Chicago">America/Chicago (CST)</option>
+                      <option value="America/Los_Angeles">America/Los_Angeles (PST)</option>
+                      <option value="Europe/London">Europe/London (GMT)</option>
+                      <option value="Europe/Berlin">Europe/Berlin (CET)</option>
+                      <option value="Asia/Dubai">Asia/Dubai (GST)</option>
+                      <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
+                      <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
+                      <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
+                      <option value="Australia/Sydney">Australia/Sydney (AEST)</option>
+                      <option value="UTC">UTC</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className={styles.modalFooter}>
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  onClick={() => setShowOfficeTimingsModal(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" disabled={officeTimingSaving} className={styles.btnPrimary}>
+                  <CheckCircleIcon size={16} />
+                  <span>{officeTimingSaving ? "Saving..." : "Save Office Timings"}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Floating Action Toast */}
       {toastMessage && (
         <div
-          className={`${styles.toast} ${
-            toastMessage.type === "success" ? styles.toastSuccess : styles.toastError
-          }`}
+          className={`${styles.toast} ${toastMessage.type === "success" ? styles.toastSuccess : styles.toastError
+            }`}
         >
           {toastMessage.type === "success" ? (
             <CheckCircleIcon size={18} color="#34d399" />

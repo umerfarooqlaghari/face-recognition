@@ -17,10 +17,13 @@ from app.api.deps import get_current_user, require_admin
 from app.schemas.auth import UserResponse
 from app.schemas.tenant import (
     TenantResponse,
+    TenantTimingsUpdateRequest,
     OfficeResponse,
     OfficeCreateRequest,
+    OfficeTimingsUpdateRequest,
     EmployeeCreateRequest,
     EmployeeUpdateRequest,
+    EmployeeShiftUpdateRequest,
     EmployeeCreateResponse,
     TenantStatsResponse,
     EmployeeImportPreviewRow,
@@ -31,6 +34,7 @@ from app.schemas.tenant import (
 )
 from app.services.email_service import send_employee_welcome_email
 from app.services.stripe_service import sync_subscription_seats
+from app.services.timing_service import resolve_employee_shift_config
 
 router = APIRouter(prefix="/management", tags=["Multi-Tenant Management"])
 
@@ -93,6 +97,40 @@ async def get_tenant_dashboard(
         attendance_rate=round(attendance_rate, 1)
     )
 
+@router.put("/tenant/timings")
+async def update_tenant_timings(
+    req: TenantTimingsUpdateRequest,
+    current_admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update organization default office timings, timezone, and grace period."""
+    tenant_res = await db.execute(select(Tenant).where(Tenant.id == current_admin.tenant_id))
+    tenant = tenant_res.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant organization not found")
+
+    if req.default_timezone is not None:
+        tenant.default_timezone = req.default_timezone.strip()
+    if req.default_work_start_time is not None:
+        tenant.default_work_start_time = req.default_work_start_time.strip()
+    if req.default_work_end_time is not None:
+        tenant.default_work_end_time = req.default_work_end_time.strip()
+    if req.default_grace_period_minutes is not None:
+        tenant.default_grace_period_minutes = max(0, req.default_grace_period_minutes)
+
+    await db.commit()
+    await db.refresh(tenant)
+    return {
+        "status": "success",
+        "message": "Organization default working hours and timezone updated",
+        "tenant": {
+            "default_timezone": tenant.default_timezone,
+            "default_work_start_time": tenant.default_work_start_time,
+            "default_work_end_time": tenant.default_work_end_time,
+            "default_grace_period_minutes": tenant.default_grace_period_minutes
+        }
+    }
+
 @router.get("/employees")
 async def list_employees(
     current_admin: User = Depends(require_admin),
@@ -100,23 +138,29 @@ async def list_employees(
 ):
     """
     List all employees scoped strictly to the current tenant.
-    Includes biometric enrollment status.
+    Includes biometric enrollment status, shift timing, and custom shift overrides.
     """
+    tenant_res = await db.execute(select(Tenant).where(Tenant.id == current_admin.tenant_id))
+    tenant = tenant_res.scalar_one_or_none()
+
     res = await db.execute(
         select(User).where(User.tenant_id == current_admin.tenant_id).order_by(User.created_at.desc())
     )
     employees = res.scalars().all()
 
-    # Get biometric status for all users in tenant
-    user_ids = [e.id for e in employees]
+    # Get biometric status for all users in tenant (scalable join)
     bio_res = await db.execute(
-        select(BiometricProfile.user_id).where(BiometricProfile.user_id.in_(user_ids))
+        select(BiometricProfile.user_id)
+        .join(User, BiometricProfile.user_id == User.id)
+        .where(User.tenant_id == current_admin.tenant_id)
     )
     enrolled_user_ids = set(bio_res.scalars().all())
 
     # Get office map
     office_res = await db.execute(select(Office).where(Office.tenant_id == current_admin.tenant_id))
-    offices = {o.id: o.name for o in office_res.scalars().all()}
+    all_offices = office_res.scalars().all()
+    offices = {o.id: o.name for o in all_offices}
+    offices_obj_map = {o.id: o for o in all_offices}
 
     # Get active/upcoming overrides
     today = date.today()
@@ -135,6 +179,9 @@ async def list_employees(
 
     output = []
     for emp in employees:
+        emp_office = offices_obj_map.get(emp.office_id)
+        shift_cfg = resolve_employee_shift_config(emp, emp_office, tenant)
+
         output.append({
             "id": str(emp.id),
             "tenant_id": str(emp.tenant_id),
@@ -155,10 +202,93 @@ async def list_employees(
             "is_active": emp.is_active,
             "face_enrolled": emp.id in enrolled_user_ids,
             "date_override": overrides_map.get(emp.id),
+            "shift_config": {
+                "is_custom": shift_cfg["is_custom_shift"],
+                "shift_name": shift_cfg["shift_name"],
+                "work_start_time": shift_cfg["work_start_time"],
+                "work_end_time": shift_cfg["work_end_time"],
+                "grace_period_minutes": shift_cfg["grace_period_minutes"],
+                "timezone": shift_cfg["timezone"]
+            },
+            "shift_name": shift_cfg["shift_name"],
+            "work_start_time": shift_cfg["work_start_time"],
+            "work_end_time": shift_cfg["work_end_time"],
+            "grace_period_minutes": shift_cfg["grace_period_minutes"],
+            "timezone": shift_cfg["timezone"],
+            "is_custom_shift": shift_cfg["is_custom_shift"],
+            "custom_work_start_time": emp.custom_work_start_time,
+            "custom_work_end_time": emp.custom_work_end_time,
+            "custom_grace_period_minutes": emp.custom_grace_period_minutes,
+            "custom_timezone": emp.custom_timezone,
             "created_at": emp.created_at.isoformat() if emp.created_at else None
         })
 
     return output
+
+@router.put("/employees/{employee_id}/shift")
+async def update_employee_shift(
+    employee_id: uuid.UUID,
+    req: EmployeeShiftUpdateRequest,
+    current_admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Manually override shift timings for an employee (e.g. Night Shift, flexible hours)
+    or revert to office/company defaults.
+    """
+    emp_res = await db.execute(
+        select(User).where(User.id == employee_id, User.tenant_id == current_admin.tenant_id)
+    )
+    emp = emp_res.scalar_one_or_none()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found in your organization")
+
+    start_time = req.custom_work_start_time if req.custom_work_start_time is not None else req.work_start_time
+    end_time = req.custom_work_end_time if req.custom_work_end_time is not None else req.work_end_time
+    grace_mins = req.custom_grace_period_minutes if req.custom_grace_period_minutes is not None else req.grace_period_minutes
+    tz = req.custom_timezone if req.custom_timezone is not None else req.timezone
+    name = req.shift_name
+
+    # Clear custom shift if explicitly requested or if all fields passed as None
+    is_reset = req.clear_custom_shift or (
+        start_time is None and end_time is None and grace_mins is None and tz is None and name is None
+    )
+
+    if is_reset:
+        emp.custom_work_start_time = None
+        emp.custom_work_end_time = None
+        emp.custom_grace_period_minutes = None
+        emp.shift_name = None
+        emp.custom_timezone = None
+    else:
+        if start_time is not None:
+            emp.custom_work_start_time = str(start_time).strip() if str(start_time).strip() else None
+        if end_time is not None:
+            emp.custom_work_end_time = str(end_time).strip() if str(end_time).strip() else None
+        if grace_mins is not None:
+            emp.custom_grace_period_minutes = max(0, int(grace_mins))
+        if name is not None:
+            emp.shift_name = str(name).strip() if str(name).strip() else None
+        if tz is not None:
+            emp.custom_timezone = str(tz).strip() if str(tz).strip() else None
+
+    await db.commit()
+    await db.refresh(emp)
+
+    tenant_res = await db.execute(select(Tenant).where(Tenant.id == current_admin.tenant_id))
+    tenant = tenant_res.scalar_one_or_none()
+    office = None
+    if emp.office_id:
+        off_res = await db.execute(select(Office).where(Office.id == emp.office_id))
+        office = off_res.scalar_one_or_none()
+    shift_cfg = resolve_employee_shift_config(emp, office, tenant)
+
+    return {
+        "status": "success",
+        "message": f"Shift schedule for {emp.full_name} updated successfully",
+        "effective_shift": shift_cfg
+    }
+
 
 @router.post("/employees", response_model=EmployeeCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_employee(
@@ -366,19 +496,52 @@ async def create_office(
     current_admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db)
 ):
-    """Add a new office with geofence radius for this tenant."""
+    """Add a new office with geofence radius, regional timezone, and work timings for this tenant."""
     new_office = Office(
         tenant_id=current_admin.tenant_id,
         name=req.name.strip(),
         latitude=req.latitude,
         longitude=req.longitude,
         radius_meters=req.radius_meters or 200,
-        address=req.address
+        address=req.address,
+        timezone=req.timezone.strip() if req.timezone else "UTC",
+        work_start_time=req.work_start_time.strip() if req.work_start_time else "09:00",
+        work_end_time=req.work_end_time.strip() if req.work_end_time else "18:00",
+        grace_period_minutes=req.grace_period_minutes if req.grace_period_minutes is not None else 15
     )
     db.add(new_office)
     await db.commit()
     await db.refresh(new_office)
     return new_office
+
+@router.put("/offices/{office_id}/timings", response_model=OfficeResponse)
+async def update_office_timings(
+    office_id: uuid.UUID,
+    req: OfficeTimingsUpdateRequest,
+    current_admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update regional office work hours, grace period, and timezone."""
+    off_res = await db.execute(
+        select(Office).where(Office.id == office_id, Office.tenant_id == current_admin.tenant_id)
+    )
+    office = off_res.scalar_one_or_none()
+    if not office:
+        raise HTTPException(status_code=404, detail="Office location not found")
+
+    if req.timezone is not None:
+        office.timezone = req.timezone.strip()
+    if req.work_start_time is not None:
+        office.work_start_time = req.work_start_time.strip()
+    if req.work_end_time is not None:
+        office.work_end_time = req.work_end_time.strip()
+    if req.grace_period_minutes is not None:
+        office.grace_period_minutes = max(0, req.grace_period_minutes)
+
+    await db.commit()
+    await db.refresh(office)
+    return office
+
 
 @router.get("/attendance/today")
 async def get_tenant_today_attendance(

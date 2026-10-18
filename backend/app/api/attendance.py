@@ -1,19 +1,36 @@
 import uuid
-from datetime import date, datetime, timezone
+import calendar
+from datetime import date, datetime, timezone, timedelta
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from app.db.session import get_db
-from app.models.models import User, AttendanceRecord, UserDevice, Leave, AttendanceRequest, Office
+from app.models.models import User, AttendanceRecord, UserDevice, Leave, AttendanceRequest, Office, Tenant
 from app.api.deps import get_current_user, require_admin
 from app.services.geo_engine import is_within_geofence
 from app.services.work_mode_service import resolve_effective_work_mode
 from app.services.attendance_service import verify_probe_face
+from app.services.timing_service import (
+    resolve_employee_shift_config,
+    calculate_lateness,
+    format_time_local,
+    format_hours_worked,
+    get_safe_zoneinfo
+)
+from app.services.email_service import (
+    send_late_employee_email,
+    send_late_digest_email
+)
 from app.schemas.attendance import (
     AttendanceCheckInResponse,
     AttendanceRecordItem,
     AttendanceTodayStatus,
+    AttendanceCalendarResponse,
+    CalendarDayItem,
+    AttendanceCalendarSummary,
+    LateDigestRequest,
+    LateDigestResponse,
     AttendanceRegularizationCreate,
     AttendanceRegularizationReview,
     AttendanceRegularizationResponse,
@@ -58,6 +75,9 @@ async def mark_attendance_check_in(
             check_in_time=existing_rec.check_in_time,
             check_out_time=existing_rec.check_out_time,
             status=existing_rec.status,
+            is_late=existing_rec.is_late,
+            minutes_late=existing_rec.minutes_late,
+            hours_worked=existing_rec.hours_worked,
             verification_type=existing_rec.verification_type,
             similarity_score=existing_rec.similarity_score,
             liveness_score=existing_rec.liveness_score,
@@ -139,14 +159,27 @@ async def mark_attendance_check_in(
         )
         device_uuid = dev_res.scalar_one_or_none()
 
-    # 6. Create Attendance Record
+    # 6. Evaluate Shift Timing & Lateness in Employee's Region Timezone
+    tenant_res = await db.execute(select(Tenant).where(Tenant.id == current_user.tenant_id))
+    tenant = tenant_res.scalar_one_or_none()
+
+    shift_cfg = resolve_employee_shift_config(current_user, office, tenant)
+    lateness = calculate_lateness(now_utc, shift_cfg)
+
+    is_late = lateness["is_late"]
+    minutes_late = lateness["minutes_late"]
+    status_val = "late" if is_late else "present"
+
+    # 7. Create Attendance Record
     new_record = AttendanceRecord(
         tenant_id=current_user.tenant_id,
         user_id=current_user.id,
         date=today,
         check_in_time=now_utc,
         verification_type=verification_type,
-        status="present",
+        status=status_val,
+        is_late=is_late,
+        minutes_late=minutes_late,
         similarity_score=similarity_score,
         liveness_score=liveness_score,
         device_id=device_uuid,
@@ -158,6 +191,32 @@ async def mark_attendance_check_in(
     await db.commit()
     await db.refresh(new_record)
 
+    # 8. Automated Late Notification Email to Employee
+    if is_late:
+        try:
+            company_name = tenant.name if tenant else "Attendance Platform"
+            await send_late_employee_email(
+                to_email=current_user.email,
+                employee_name=current_user.full_name,
+                employee_code=current_user.employee_code,
+                check_in_time_str=lateness["local_check_in_str"],
+                scheduled_start_str=lateness["scheduled_start_str"],
+                grace_period_minutes=shift_cfg["grace_period_minutes"],
+                minutes_late=minutes_late,
+                company_name=company_name,
+                shift_name=shift_cfg["shift_name"]
+            )
+            new_record.late_notified_at = now_utc
+            await db.commit()
+        except Exception:
+            pass
+
+    msg = f"Check-in verified ({verification_type}, similarity: {similarity_score:.1%})."
+    if is_late:
+        msg += f" Note: Marked as LATE by {minutes_late} minutes (Scheduled start: {lateness['scheduled_start_str']})."
+    else:
+        msg += f" On-time arrival ({lateness['local_check_in_str']})."
+
     return AttendanceCheckInResponse(
         id=new_record.id,
         user_id=new_record.user_id,
@@ -165,18 +224,69 @@ async def mark_attendance_check_in(
         check_in_time=new_record.check_in_time,
         check_out_time=new_record.check_out_time,
         status=new_record.status,
+        is_late=new_record.is_late,
+        minutes_late=new_record.minutes_late,
+        hours_worked=new_record.hours_worked,
         verification_type=new_record.verification_type,
         similarity_score=new_record.similarity_score,
         liveness_score=new_record.liveness_score,
         distance_from_office_meters=new_record.distance_from_office_meters,
-        message=f"Attendance check-in marked successfully! ({verification_type}, similarity: {similarity_score:.1%})"
+        message=msg
     )
 
 @router.post("/check-out", response_model=AttendanceCheckInResponse)
 async def mark_attendance_check_out(
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+    # Handle JSON bodies, Form data, or query params seamlessly across web, mobile, and cURL
+    content_type = request.headers.get("content-type", "").lower()
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                latitude = body.get("latitude")
+                longitude = body.get("longitude")
+        except Exception:
+            pass
+    elif "multipart/form-data" in content_type or "application/x-www-form-urlencoded" in content_type:
+        try:
+            form = await request.form()
+            lat_val = form.get("latitude")
+            lng_val = form.get("longitude")
+            if lat_val is not None and str(lat_val).strip() != "":
+                latitude = float(lat_val)
+            if lng_val is not None and str(lng_val).strip() != "":
+                longitude = float(lng_val)
+        except Exception:
+            pass
+
+    if latitude is None and "latitude" in request.query_params:
+        try:
+            latitude = float(request.query_params["latitude"])
+        except (ValueError, TypeError):
+            pass
+    if longitude is None and "longitude" in request.query_params:
+        try:
+            longitude = float(request.query_params["longitude"])
+        except (ValueError, TypeError):
+            pass
+
+    if latitude is not None:
+        try:
+            latitude = float(latitude)
+        except (ValueError, TypeError):
+            latitude = None
+    if longitude is not None:
+        try:
+            longitude = float(longitude)
+        except (ValueError, TypeError):
+            longitude = None
+
     today = date.today()
     rec_res = await db.execute(
         select(AttendanceRecord).where(
@@ -191,10 +301,55 @@ async def mark_attendance_check_out(
             detail="Cannot check out without checking in first today."
         )
 
+    # 1. Tenant & Office lookup for local timezone representation
+    tenant_res = await db.execute(select(Tenant).where(Tenant.id == current_user.tenant_id))
+    tenant = tenant_res.scalar_one_or_none()
+    office = None
+    if current_user.office_id:
+        off_res = await db.execute(select(Office).where(Office.id == current_user.office_id))
+        office = off_res.scalar_one_or_none()
+    shift_cfg = resolve_employee_shift_config(current_user, office, tenant)
+
+    # 2. Check if already checked out today
+    if record.check_out_time is not None:
+        local_checkout = format_time_local(record.check_out_time, shift_cfg["timezone"])
+        duration_fmt = format_hours_worked(record.hours_worked)
+        return AttendanceCheckInResponse(
+            id=record.id,
+            user_id=record.user_id,
+            date=record.date,
+            check_in_time=record.check_in_time,
+            check_out_time=record.check_out_time,
+            status=record.status,
+            is_late=record.is_late,
+            minutes_late=record.minutes_late,
+            hours_worked=record.hours_worked,
+            verification_type=record.verification_type,
+            similarity_score=record.similarity_score,
+            liveness_score=record.liveness_score,
+            distance_from_office_meters=record.distance_from_office_meters,
+            message=f"Already checked out today at {local_checkout}. Total duration: {duration_fmt} ({record.hours_worked}h)."
+        )
+
+    # 3. Record Check-Out & Compute Worked Hours
     now_utc = datetime.now(timezone.utc)
+    check_in_utc = record.check_in_time.replace(tzinfo=timezone.utc) if record.check_in_time.tzinfo is None else record.check_in_time
+    delta_seconds = max(0.0, (now_utc - check_in_utc).total_seconds())
+    hours_worked = round(delta_seconds / 3600.0, 2)
+
+
     record.check_out_time = now_utc
+    record.hours_worked = hours_worked
+    if latitude is not None:
+        record.check_out_latitude = latitude
+    if longitude is not None:
+        record.check_out_longitude = longitude
+
     await db.commit()
     await db.refresh(record)
+
+    duration_fmt = format_hours_worked(hours_worked)
+    local_checkout = format_time_local(now_utc, shift_cfg["timezone"])
 
     return AttendanceCheckInResponse(
         id=record.id,
@@ -203,12 +358,16 @@ async def mark_attendance_check_out(
         check_in_time=record.check_in_time,
         check_out_time=record.check_out_time,
         status=record.status,
+        is_late=record.is_late,
+        minutes_late=record.minutes_late,
+        hours_worked=record.hours_worked,
         verification_type=record.verification_type,
         similarity_score=record.similarity_score,
         liveness_score=record.liveness_score,
         distance_from_office_meters=record.distance_from_office_meters,
-        message="Checked out successfully!"
+        message=f"Checked out successfully at {local_checkout}! Total worked: {duration_fmt} ({hours_worked} hours)."
     )
+
 
 @router.get("/today/{user_id}", response_model=AttendanceTodayStatus)
 async def get_today_attendance_status(
@@ -541,8 +700,11 @@ async def get_timesheets(
     for rec, usr, off in rows:
         duration = None
         if rec.check_out_time and rec.check_in_time:
-            delta = (rec.check_out_time - rec.check_in_time).total_seconds()
+            c_in = rec.check_in_time.replace(tzinfo=timezone.utc) if rec.check_in_time.tzinfo is None else rec.check_in_time
+            c_out = rec.check_out_time.replace(tzinfo=timezone.utc) if rec.check_out_time.tzinfo is None else rec.check_out_time
+            delta = max(0.0, (c_out - c_in).total_seconds())
             duration = round(delta / 3600.0, 2)
+
 
         output.append(
             TimesheetItemResponse(
@@ -562,4 +724,300 @@ async def get_timesheets(
             )
         )
     return output
+
+@router.get("/calendar/{user_id}", response_model=AttendanceCalendarResponse)
+async def get_employee_attendance_calendar(
+    user_id: uuid.UUID,
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Calendar View: Daily check-in & check-out times, status, worked hours, and monthly metrics.
+    Admin/HR can view any employee; employees can view their own calendar.
+    """
+    if current_user.id != user_id:
+        if current_user.role not in ["manager", "admin", "super_admin"]:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        target_check = await db.execute(
+            select(User).where(User.id == user_id, User.tenant_id == current_user.tenant_id)
+        )
+        target_user = target_check.scalar_one_or_none()
+        if not target_user:
+            raise HTTPException(status_code=404, detail="Employee not found in organization")
+    else:
+        target_user = current_user
+
+    # Fetch tenant & office for shift and timezone resolution
+    tenant_res = await db.execute(select(Tenant).where(Tenant.id == target_user.tenant_id))
+    tenant = tenant_res.scalar_one_or_none()
+    office = None
+    if target_user.office_id:
+        off_res = await db.execute(select(Office).where(Office.id == target_user.office_id))
+        office = off_res.scalar_one_or_none()
+
+    shift_cfg = resolve_employee_shift_config(target_user, office, tenant)
+    user_tz = get_safe_zoneinfo(shift_cfg["timezone"])
+
+    # Current local date in employee's timezone
+    now_local = datetime.now(user_tz)
+    target_year = year or now_local.year
+    target_month = month or now_local.month
+
+    if target_month < 1 or target_month > 12:
+        raise HTTPException(status_code=400, detail="Invalid month. Must be between 1 and 12.")
+
+    # Calculate days in month
+    _, num_days = calendar.monthrange(target_year, target_month)
+    month_start_date = date(target_year, target_month, 1)
+    month_end_date = date(target_year, target_month, num_days)
+    today_date = now_local.date()
+
+    # Query attendance records for this month
+    records_res = await db.execute(
+        select(AttendanceRecord).where(
+            AttendanceRecord.user_id == target_user.id,
+            AttendanceRecord.date >= month_start_date,
+            AttendanceRecord.date <= month_end_date
+        )
+    )
+    records_by_date = {r.date: r for r in records_res.scalars().all()}
+
+    # Query approved leaves overlapping this month
+    leaves_res = await db.execute(
+        select(Leave).where(
+            Leave.user_id == target_user.id,
+            Leave.status == "approved",
+            Leave.start_date <= month_end_date,
+            Leave.end_date >= month_start_date
+        )
+    )
+    leaves_list = leaves_res.scalars().all()
+
+    def find_leave_reason_for_date(d: date) -> Optional[str]:
+        for lv in leaves_list:
+            if lv.start_date <= d <= lv.end_date:
+                return lv.reason
+        return None
+
+    days_output: List[CalendarDayItem] = []
+    total_hours_sum = 0.0
+    present_days_count = 0
+    late_days_count = 0
+    leave_days_count = 0
+    absent_days_count = 0
+    working_days_count = 0
+
+    for day_num in range(1, num_days + 1):
+        d = date(target_year, target_month, day_num)
+        weekday_num = d.weekday()  # 0=Mon ... 6=Sun
+        day_of_week_str = d.strftime("%a")
+        is_wknd = weekday_num in [5, 6]
+        d_str = d.isoformat()
+
+        if not is_wknd and d <= today_date:
+            working_days_count += 1
+
+        rec = records_by_date.get(d)
+        leave_reason = find_leave_reason_for_date(d)
+
+        check_in_str = None
+        check_out_str = None
+        check_in_iso = None
+        check_out_iso = None
+        hours_val = None
+        hours_formatted = None
+        v_type = None
+        is_late_val = False
+        min_late_val = 0
+
+        if rec:
+            check_in_str = format_time_local(rec.check_in_time, shift_cfg["timezone"])
+            check_in_iso = rec.check_in_time.isoformat() if rec.check_in_time else None
+            if rec.check_out_time:
+                check_out_str = format_time_local(rec.check_out_time, shift_cfg["timezone"])
+                check_out_iso = rec.check_out_time.isoformat()
+            hours_val = rec.hours_worked
+            hours_formatted = format_hours_worked(rec.hours_worked)
+            v_type = rec.verification_type
+            is_late_val = rec.is_late
+            min_late_val = rec.minutes_late
+
+            if is_late_val:
+                day_status = "late"
+                late_days_count += 1
+                present_days_count += 1
+            elif rec.check_out_time is None and d < today_date:
+                day_status = "missing_checkout"
+                present_days_count += 1
+            elif rec.check_out_time is None and d == today_date:
+                day_status = "checked_in"
+                present_days_count += 1
+            else:
+                day_status = "present"
+                present_days_count += 1
+
+            if hours_val:
+                total_hours_sum += hours_val
+
+        elif leave_reason:
+            day_status = "on_leave"
+            leave_days_count += 1
+        elif d > today_date:
+            day_status = "upcoming"
+        elif is_wknd:
+            day_status = "weekend"
+        elif d == today_date:
+            day_status = "not_checked_in"
+        else:
+            day_status = "absent"
+            absent_days_count += 1
+
+        days_output.append(
+            CalendarDayItem(
+                date=d_str,
+                day=day_num,
+                day_of_week=day_of_week_str,
+                is_weekend=is_wknd,
+                check_in_time=check_in_str,
+                check_out_time=check_out_str,
+                check_in_iso=check_in_iso,
+                check_out_iso=check_out_iso,
+                status=day_status,
+                is_late=is_late_val,
+                minutes_late=min_late_val,
+                hours_worked=hours_val,
+                hours_worked_formatted=hours_formatted,
+                verification_type=v_type,
+                leave_reason=leave_reason
+            )
+        )
+
+    avg_hours = round(total_hours_sum / max(1, present_days_count), 2) if present_days_count > 0 else 0.0
+    on_time_pct = round(((present_days_count - late_days_count) / max(1, present_days_count)) * 100, 1) if present_days_count > 0 else 100.0
+
+    summary = AttendanceCalendarSummary(
+        total_days=num_days,
+        working_days=working_days_count,
+        present_days=present_days_count,
+        late_days=late_days_count,
+        absent_days=absent_days_count,
+        leave_days=leave_days_count,
+        total_hours_worked=round(total_hours_sum, 2),
+        average_hours_per_day=avg_hours,
+        on_time_rate_pct=on_time_pct
+    )
+
+    return AttendanceCalendarResponse(
+        user_id=target_user.id,
+        employee_name=target_user.full_name,
+        employee_code=target_user.employee_code,
+        year=target_year,
+        month=target_month,
+        month_name=calendar.month_name[target_month],
+        timezone=shift_cfg["timezone"],
+        shift_name=shift_cfg["shift_name"],
+        scheduled_start_time=shift_cfg["work_start_time"],
+        scheduled_end_time=shift_cfg["work_end_time"],
+        grace_period_minutes=shift_cfg["grace_period_minutes"],
+        days=days_output,
+        summary=summary
+    )
+
+@router.post("/send-late-digest", response_model=LateDigestResponse)
+async def send_daily_late_digest(
+    request: Request,
+    body: Optional[LateDigestRequest] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Dispatches a batch email digest to HR/Admins with all employees who were late today (or target_date).
+    """
+    if current_user.role not in ["admin", "manager", "super_admin"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Management access required")
+
+    target_date = None
+    if body and body.target_date:
+        target_date = body.target_date
+    elif "target_date" in request.query_params or "date_str" in request.query_params:
+        raw_d = request.query_params.get("target_date") or request.query_params.get("date_str")
+        try:
+            target_date = date.fromisoformat(raw_d)
+        except Exception:
+            pass
+
+    if not target_date:
+        target_date = date.today()
+
+    # Query all late records for this tenant and date
+    stmt = (
+        select(AttendanceRecord, User, Office)
+        .join(User, AttendanceRecord.user_id == User.id)
+        .outerjoin(Office, User.office_id == Office.id)
+        .where(
+            AttendanceRecord.tenant_id == current_user.tenant_id,
+            AttendanceRecord.date == target_date,
+            AttendanceRecord.is_late == True
+        )
+        .order_by(AttendanceRecord.check_in_time.asc())
+    )
+    res = await db.execute(stmt)
+    late_rows = res.all()
+
+    # Query HR/Admin recipients
+    hr_res = await db.execute(
+        select(User.email).where(
+            User.tenant_id == current_user.tenant_id,
+            User.role.in_(["admin", "super_admin"]),
+            User.is_active == True
+        )
+    )
+    recipient_emails = list({e for e in hr_res.scalars().all() if e})
+    if current_user.email and current_user.email not in recipient_emails:
+        recipient_emails.append(current_user.email)
+
+    tenant_res = await db.execute(select(Tenant).where(Tenant.id == current_user.tenant_id))
+    tenant = tenant_res.scalar_one_or_none()
+    company_name = tenant.name if tenant else "Attendance Platform"
+
+    late_items = []
+    for att, usr, off in late_rows:
+        shift_cfg = resolve_employee_shift_config(usr, off, tenant)
+        check_in_formatted = format_time_local(att.check_in_time, shift_cfg["timezone"])
+        late_items.append({
+            "name": usr.full_name,
+            "code": usr.employee_code,
+            "department": usr.department or "General",
+            "shift_name": shift_cfg["shift_name"],
+            "scheduled_start": shift_cfg["work_start_time"],
+            "check_in_time": check_in_formatted,
+            "minutes_late": att.minutes_late
+        })
+
+    if not late_items:
+        return LateDigestResponse(
+            status="no_late_records",
+            target_date=target_date,
+            late_count=0,
+            recipients=recipient_emails,
+            message=f"No late check-ins recorded for {target_date.isoformat()}."
+        )
+
+    dispatch_res = await send_late_digest_email(
+        to_emails=recipient_emails,
+        company_name=company_name,
+        target_date_str=target_date.isoformat(),
+        late_items=late_items
+    )
+
+    return LateDigestResponse(
+        status="sent" if dispatch_res.get("delivered") else "error",
+        target_date=target_date,
+        late_count=len(late_items),
+        recipients=recipient_emails,
+        message=f"Late arrivals digest dispatched to {len(recipient_emails)} recipient(s) for {len(late_items)} late employee(s)."
+    )
+
 

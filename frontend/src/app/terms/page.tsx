@@ -75,7 +75,7 @@ export default function TermsPage() {
           <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16, marginTop: 12, fontSize: 14 }}>
             <strong>Alpha Software Development Limited</strong><br />
             Email: <a href="mailto:legal@alpha-devs.cloud" style={{ color: "#4f46e5" }}>legal@alpha-devs.cloud</a><br />
-            Support: <a href="mailto:support@alpha-devs.cloud" style={{ color: "#4f46e5" }}>support@alpha-devs.cloud</a>
+            Support: <a href="mailto:info@alpha-devs.cloud" style={{ color: "#4f46e5" }}>info@alpha-devs.cloud</a>
           </div>
         </section>
       </main>

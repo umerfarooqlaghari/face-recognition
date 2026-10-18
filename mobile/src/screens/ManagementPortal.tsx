@@ -33,6 +33,8 @@ import {
   downloadEmployeeImportTemplate,
   previewEmployeeImport,
   commitEmployeeImport,
+  getEmployeeAttendanceCalendar,
+  sendLateDigest,
   LeaveItem,
   OfficeItem,
 } from '../services/api';
@@ -61,6 +63,8 @@ import {
   CopyIcon,
   UploadCloudIcon,
   FileTextIcon,
+  CalendarIcon,
+  ClockIcon,
 } from '../components/SvgIcons';
 import { MobileOsmMapPicker } from '../components/MobileOsmMapPicker';
 
@@ -131,6 +135,15 @@ export default function ManagementPortal({
     tempPass: string;
     inviteToken: string;
   } | null>(null);
+
+  // Attendance Calendar Modal State
+  const [showCalendarModal, setShowCalendarModal] = useState<boolean>(false);
+  const [calendarEmp, setCalendarEmp] = useState<EmployeeItem | null>(null);
+  const [calendarData, setCalendarData] = useState<any | null>(null);
+  const [calendarLoading, setCalendarLoading] = useState<boolean>(false);
+  const [calendarYear, setCalendarYear] = useState<number>(2026);
+  const [calendarMonth, setCalendarMonth] = useState<number>(10);
+  const [digestSending, setDigestSending] = useState<boolean>(false);
 
   // CSV Import Wizard State
   const [showImportModal, setShowImportModal] = useState<boolean>(false);
@@ -229,6 +242,82 @@ export default function ManagementPortal({
   const onRefresh = () => {
     setRefreshing(true);
     loadManagementData();
+  };
+
+  const handleOpenCalendar = async (emp: EmployeeItem) => {
+    setCalendarEmp(emp);
+    const now = new Date();
+    const curYear = now.getFullYear();
+    const curMonth = now.getMonth() + 1;
+    setCalendarYear(curYear);
+    setCalendarMonth(curMonth);
+    setShowCalendarModal(true);
+    setCalendarLoading(true);
+    try {
+      const data = await getEmployeeAttendanceCalendar(emp.id, curYear, curMonth);
+      setCalendarData(data);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to load attendance calendar');
+    } finally {
+      setCalendarLoading(false);
+    }
+  };
+
+  const handlePrevCalMonth = async () => {
+    if (!calendarEmp) return;
+    let nextMonth = calendarMonth - 1;
+    let nextYear = calendarYear;
+    if (nextMonth < 1) {
+      nextMonth = 12;
+      nextYear -= 1;
+    }
+    setCalendarYear(nextYear);
+    setCalendarMonth(nextMonth);
+    setCalendarLoading(true);
+    try {
+      const data = await getEmployeeAttendanceCalendar(calendarEmp.id, nextYear, nextMonth);
+      setCalendarData(data);
+    } catch (err: any) {
+      Alert.alert('Error', err.message);
+    } finally {
+      setCalendarLoading(false);
+    }
+  };
+
+  const handleNextCalMonth = async () => {
+    if (!calendarEmp) return;
+    let nextMonth = calendarMonth + 1;
+    let nextYear = calendarYear;
+    if (nextMonth > 12) {
+      nextMonth = 1;
+      nextYear += 1;
+    }
+    setCalendarYear(nextYear);
+    setCalendarMonth(nextMonth);
+    setCalendarLoading(true);
+    try {
+      const data = await getEmployeeAttendanceCalendar(calendarEmp.id, nextYear, nextMonth);
+      setCalendarData(data);
+    } catch (err: any) {
+      Alert.alert('Error', err.message);
+    } finally {
+      setCalendarLoading(false);
+    }
+  };
+
+  const handleSendLateDigestMobile = async () => {
+    try {
+      setDigestSending(true);
+      const res = await sendLateDigest();
+      Alert.alert(
+        'Digest Dispatched',
+        res.message || `Dispatched late arrivals digest (${res.late_count} late employees).`
+      );
+    } catch (err: any) {
+      Alert.alert('Dispatch Failed', err.message);
+    } finally {
+      setDigestSending(false);
+    }
   };
 
   const handleSendInvite = async (emp: EmployeeItem) => {
@@ -781,6 +870,16 @@ export default function ManagementPortal({
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
               <TouchableOpacity
                 style={styles.compactGhostBtn}
+                onPress={handleSendLateDigestMobile}
+                disabled={digestSending}
+              >
+                <MailIcon size={12} color="#d97706" />
+                <Text style={[styles.compactGhostBtnText, { color: '#d97706' }]}>
+                  {digestSending ? 'Sending...' : 'Late Digest'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.compactGhostBtn}
                 onPress={() => {
                   handleImportReset();
                   setShowImportModal(true);
@@ -903,6 +1002,14 @@ export default function ManagementPortal({
                         <MailIcon size={13} color="#0284c7" />
                       </TouchableOpacity>
                     )}
+
+                    <TouchableOpacity
+                      style={styles.empRowActionBtn}
+                      onPress={() => handleOpenCalendar(emp)}
+                      accessibilityLabel="View Attendance Calendar"
+                    >
+                      <CalendarIcon size={13} color="#0284c7" />
+                    </TouchableOpacity>
 
                     <TouchableOpacity
                       style={styles.empRowActionBtn}
@@ -2284,6 +2391,149 @@ export default function ManagementPortal({
                 </TouchableOpacity>
               </View>
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ============================================================== */}
+      {/* MODAL: EMPLOYEE ATTENDANCE CALENDAR VIEW */}
+      {/* ============================================================== */}
+      <Modal
+        visible={showCalendarModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowCalendarModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { maxHeight: '90%' }]}>
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, marginRight: 8 }}>
+                <CalendarIcon size={18} color="#0284c7" />
+                <View style={{ flexShrink: 1 }}>
+                  <Text style={styles.modalTitle} numberOfLines={1}>
+                    {calendarEmp?.full_name || 'Attendance'}
+                  </Text>
+                  <Text style={{ fontSize: 11, color: '#64748b' }}>
+                    {calendarEmp?.employee_code} • {calendarData?.month_name || `${calendarYear}-${calendarMonth}`}
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity onPress={() => setShowCalendarModal(false)} style={styles.modalCloseBtn}>
+                <CloseIcon size={18} color="#94a3b8" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Month Navigation */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderColor: '#f1f5f9' }}>
+              <TouchableOpacity
+                onPress={handlePrevCalMonth}
+                style={{ padding: 6, borderRadius: 6, backgroundColor: '#f1f5f9' }}
+              >
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#0284c7' }}>{'< Prev'}</Text>
+              </TouchableOpacity>
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>
+                {calendarData?.month_name || `${calendarYear}-${String(calendarMonth).padStart(2, '0')}`}
+              </Text>
+              <TouchableOpacity
+                onPress={handleNextCalMonth}
+                style={{ padding: 6, borderRadius: 6, backgroundColor: '#f1f5f9' }}
+              >
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#0284c7' }}>{'Next >'}</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Summary Metrics */}
+            {calendarData?.summary && (
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, padding: 12, backgroundColor: '#f8fafc', borderBottomWidth: 1, borderColor: '#f1f5f9' }}>
+                <View style={{ flex: 1, minWidth: 70, backgroundColor: '#ffffff', padding: 6, borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0', alignItems: 'center' }}>
+                  <Text style={{ fontSize: 9, color: '#64748b', fontWeight: '600' }}>PRESENT</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#059669', marginTop: 2 }}>{calendarData.summary.days_present}</Text>
+                </View>
+                <View style={{ flex: 1, minWidth: 70, backgroundColor: '#ffffff', padding: 6, borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0', alignItems: 'center' }}>
+                  <Text style={{ fontSize: 9, color: '#64748b', fontWeight: '600' }}>LATE</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#d97706', marginTop: 2 }}>{calendarData.summary.days_late}</Text>
+                </View>
+                <View style={{ flex: 1, minWidth: 70, backgroundColor: '#ffffff', padding: 6, borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0', alignItems: 'center' }}>
+                  <Text style={{ fontSize: 9, color: '#64748b', fontWeight: '600' }}>ABSENT</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#dc2626', marginTop: 2 }}>{calendarData.summary.days_absent}</Text>
+                </View>
+                <View style={{ flex: 1, minWidth: 70, backgroundColor: '#ffffff', padding: 6, borderRadius: 6, borderWidth: 1, borderColor: '#e2e8f0', alignItems: 'center' }}>
+                  <Text style={{ fontSize: 9, color: '#64748b', fontWeight: '600' }}>HOURS</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#0284c7', marginTop: 2 }}>{calendarData.summary.total_hours_worked}h</Text>
+                </View>
+              </View>
+            )}
+
+            {calendarLoading ? (
+              <ActivityIndicator size="small" color="#0284c7" style={{ marginVertical: 32 }} />
+            ) : (
+              <ScrollView style={{ padding: 12, maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+                {calendarData?.days?.map((day: any) => (
+                  <View
+                    key={day.date}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      paddingVertical: 8,
+                      paddingHorizontal: 10,
+                      marginBottom: 6,
+                      borderRadius: 8,
+                      borderWidth: 1,
+                      borderColor: day.status === 'present' ? '#a7f3d0' : day.status === 'late' ? '#fde68a' : day.is_weekend ? '#f1f5f9' : '#e2e8f0',
+                      backgroundColor: day.status === 'present' ? '#ecfdf5' : day.status === 'late' ? '#fffbeb' : day.is_weekend ? '#f8fafc' : '#ffffff',
+                    }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#0f172a', width: 48 }}>
+                        {day.day_name} {day.day_of_month}
+                      </Text>
+                      <View style={{
+                        paddingHorizontal: 6,
+                        paddingVertical: 2,
+                        borderRadius: 4,
+                        backgroundColor: day.status === 'present' ? '#d1fae5' : day.status === 'late' ? '#fef3c7' : day.status === 'absent' ? '#fee2e2' : '#f1f5f9'
+                      }}>
+                        <Text style={{
+                          fontSize: 9,
+                          fontWeight: '700',
+                          textTransform: 'uppercase',
+                          color: day.status === 'present' ? '#059669' : day.status === 'late' ? '#d97706' : day.status === 'absent' ? '#dc2626' : '#64748b'
+                        }}>
+                          {day.status}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={{ alignItems: 'flex-end' }}>
+                      {day.check_in_local ? (
+                        <Text style={{ fontSize: 11, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: '#334155' }}>
+                          In: {day.check_in_local} {day.check_out_local ? `| Out: ${day.check_out_local}` : ''}
+                        </Text>
+                      ) : day.is_on_leave ? (
+                        <Text style={{ fontSize: 11, color: '#7c3aed' }}>Leave</Text>
+                      ) : (
+                        <Text style={{ fontSize: 11, color: '#94a3b8' }}>{day.is_weekend ? 'Weekend' : 'No Check-In'}</Text>
+                      )}
+                      {day.hours_worked != null && day.hours_worked > 0 && (
+                        <Text style={{ fontSize: 10, fontWeight: '600', color: '#0284c7' }}>
+                          {day.hours_worked} hrs
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+
+            <View style={{ padding: 12, borderTopWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#f8fafc' }}>
+              <TouchableOpacity
+                style={{ backgroundColor: '#0284c7', paddingVertical: 10, borderRadius: 8, alignItems: 'center' }}
+                onPress={() => setShowCalendarModal(false)}
+              >
+                <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 13 }}>Done</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>

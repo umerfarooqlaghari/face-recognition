@@ -243,5 +243,21 @@ export const ArrowRightIcon: React.FC<IconProps> = ({ size = 20, color = '#0f172
   </Svg>
 );
 
+export const MenuIcon: React.FC<IconProps> = ({ size = 22, color = '#0f172a' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Line x1="3" y1="12" x2="21" y2="12" />
+    <Line x1="3" y1="6" x2="21" y2="6" />
+    <Line x1="3" y1="18" x2="21" y2="18" />
+  </Svg>
+);
+
+export const HelpCircleIcon: React.FC<IconProps> = ({ size = 20, color = '#0f172a' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <Circle cx="12" cy="12" r="10" />
+    <Path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+    <Line x1="12" y1="17" x2="12.01" y2="17" />
+  </Svg>
+);
+
 
 

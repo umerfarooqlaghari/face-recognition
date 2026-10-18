@@ -9,7 +9,6 @@ import {
   ActivityIndicator,
   TextInput,
   Image,
-  Linking,
 } from 'react-native';
 import { User } from '../types';
 import { getCurrentGPSLocation, LocationCoordinates } from '../services/location';
@@ -29,16 +28,18 @@ import {
   UserIcon,
   ShieldIcon,
   CameraIcon,
-  RefreshIcon,
   GlobeIcon,
   LocationPinIcon,
   AlertIcon,
   CheckIcon,
-  LogOutIcon,
-  ChevronRightIcon,
+  MenuIcon,
+  CalendarIcon,
   ClockIcon,
+  ChevronRightIcon,
 } from '../components/SvgIcons';
 import LeaveCalendarPicker from '../components/LeaveCalendarPicker';
+import HamburgerMenuModal from '../components/HamburgerMenuModal';
+import AttendanceCalendarModal from '../components/AttendanceCalendarModal';
 
 interface EmployeePortalProps {
   user: User;
@@ -62,13 +63,15 @@ export default function EmployeePortal({
   const [radiusMeters, setRadiusMeters] = useState<number>(200);
 
   const [coords, setCoords] = useState<LocationCoordinates | null>(null);
-  const [distanceMeters, setDistanceMeters] = useState<number | null>(null);
   const [isWithinGeofence, setIsWithinGeofence] = useState<boolean | null>(null);
   const [locLoading, setLocLoading] = useState(false);
-  const [locError, setLocError] = useState<string | null>(null);
 
   const [todayAttendance, setTodayAttendance] = useState<any | null>(null);
   const [history, setHistory] = useState<any[]>([]);
+
+  // Navigation & Modals
+  const [showHamburger, setShowHamburger] = useState(false);
+  const [showCalendarModal, setShowCalendarModal] = useState(false);
 
   // Leave Management State
   const tomorrow = new Date();
@@ -97,7 +100,7 @@ export default function EmployeePortal({
       setHistory(histData);
       setLeavesList(myLeaves);
     } catch {
-      // Ignored if offline
+      // Offline fallback
     }
   };
 
@@ -127,7 +130,7 @@ export default function EmployeePortal({
 
       Alert.alert(
         'Leave Request Submitted',
-        `Your request for ${datesSummary} has been submitted for management approval.`
+        `Your request for ${datesSummary} has been submitted for management review.`
       );
       setLeaveReason('');
       setSelectedLeaveDates([tomorrowStr]);
@@ -144,7 +147,6 @@ export default function EmployeePortal({
   const loadWorkModeAndLocation = async () => {
     try {
       setLocLoading(true);
-      setLocError(null);
 
       try {
         const modeStatus = await getWorkModeStatus(user.id);
@@ -170,9 +172,8 @@ export default function EmployeePortal({
       });
 
       setIsWithinGeofence(validation.is_within_geofence);
-      setDistanceMeters(validation.distance_meters ?? null);
-    } catch (err: any) {
-      setLocError(err.message || 'Unable to retrieve location');
+    } catch {
+      // Handled silently for background geofence check
     } finally {
       setLocLoading(false);
     }
@@ -184,7 +185,7 @@ export default function EmployeePortal({
     if (!isRemote && isWithinGeofence === false) {
       Alert.alert(
         'Out of Office Bounds',
-        `You are currently ${distanceMeters?.toFixed(0) || 'unknown'}m away from ${officeName}. You must be within the ${radiusMeters}m geofence radius to mark attendance.`,
+        `You must be within the authorized office area at ${officeName} to mark attendance.`,
         [{ text: 'OK' }]
       );
       return;
@@ -209,7 +210,7 @@ export default function EmployeePortal({
   const handleDeleteAccount = () => {
     Alert.alert(
       'Delete Account & Biometric Data',
-      'Are you sure you want to permanently delete your account? This will erase your personal records, 512D ArcFace biometric embedding, and all attendance logs. This action is irreversible.',
+      'Are you sure you want to permanently delete your account? This will erase your personal profile, face biometric reference embedding, and all attendance logs. This action cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -219,7 +220,7 @@ export default function EmployeePortal({
             try {
               await deleteMyAccount();
               await clearSession();
-              Alert.alert('Account Deleted', 'Your account and biometric data have been permanently deleted.');
+              Alert.alert('Account Deleted', 'Your account and biometric data have been permanently removed.');
               onLogout();
             } catch (err: any) {
               Alert.alert('Error', err.message || 'Failed to delete account');
@@ -230,11 +231,22 @@ export default function EmployeePortal({
     );
   };
 
+  // Today Date String
+  const todayFormatted = new Date().toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+  });
+
+  const hasCheckedIn = todayAttendance?.has_checked_in || todayAttendance?.checked_in;
+  const hasCheckedOut = todayAttendance?.checked_out || todayAttendance?.has_checked_out;
+  const record = todayAttendance?.record;
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {/* Sleek Single-Line Header */}
+      {/* Sleek App Top Bar */}
       <View style={styles.topBar}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, marginRight: 8 }}>
+        <View style={styles.topBarLeft}>
           <Image
             source={require('../../assets/image.png')}
             style={styles.portalLogo}
@@ -242,167 +254,154 @@ export default function EmployeePortal({
           />
           <View style={{ flexShrink: 1 }}>
             <Text style={styles.userName} numberOfLines={1}>{user.full_name}</Text>
-            <Text style={styles.userCode}>CODE: {user.employee_code}</Text>
+            <Text style={styles.userCode}>{user.employee_code} • {isRemote ? 'Remote' : officeName}</Text>
           </View>
         </View>
 
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <View style={styles.topBarRight}>
           {user.role !== 'employee' && onSwitchPortal && (
             <TouchableOpacity style={styles.switchButton} onPress={onSwitchPortal}>
-              <ShieldIcon size={12} color="#1e3a8a" />
+              <ShieldIcon size={12} color="#0284c7" />
               <Text style={styles.switchButtonText}>Admin</Text>
             </TouchableOpacity>
           )}
 
-          <TouchableOpacity style={styles.logoutBtn} onPress={onLogout} accessibilityLabel="Sign Out">
-            <LogOutIcon size={13} color="#64748b" />
+          <TouchableOpacity
+            style={styles.menuButton}
+            onPress={() => setShowHamburger(true)}
+            accessibilityLabel="Open Menu"
+          >
+            <MenuIcon size={20} color="#0f172a" />
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Work Mode Card */}
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
-          <View style={styles.modePill}>
-            {isRemote ? (
-              <GlobeIcon size={14} color="#1e3a8a" />
-            ) : (
-              <LocationPinIcon size={14} color="#1e3a8a" />
-            )}
-            <Text style={styles.modePillText}>
-              {isRemote ? 'REMOTE WORKER' : 'ON-SITE WORKER'}
-            </Text>
-          </View>
-          {isOverride && (
-            <View style={styles.overridePill}>
-              <Text style={styles.overridePillText}>Date Override Active</Text>
-            </View>
-          )}
-        </View>
-
-        <Text style={styles.modeDescription}>
-          {isRemote
-            ? overrideReason
-              ? `Override reason: "${overrideReason}". Approved for remote check-in today.`
-              : 'Configured for Remote attendance. Geofencing requirement is waived.'
-            : `Scheduled for On-Site attendance at ${officeName}. You must be within ${radiusMeters}m to mark attendance.`}
-        </Text>
-
-        {/* GPS Geofence Status */}
-        <View style={styles.locSection}>
-          <View style={styles.locStatusRow}>
-            <Text style={styles.locStatusLabel}>GEOFENCE AUDIT STATUS</Text>
-            <TouchableOpacity onPress={loadWorkModeAndLocation} disabled={locLoading} style={styles.refreshLocBtn}>
-              {locLoading ? (
-                <ActivityIndicator size="small" color="#1e3a8a" />
+      {/* Hero Attendance Action Card */}
+      <View style={styles.heroCard}>
+        <View style={styles.heroCardHeader}>
+          <View>
+            <Text style={styles.todayDateText}>{todayFormatted}</Text>
+            <View style={styles.workModeRow}>
+              {isRemote ? (
+                <GlobeIcon size={13} color="#0284c7" />
               ) : (
-                <View style={styles.inlineRow}>
-                  <RefreshIcon size={12} color="#1e3a8a" />
-                  <Text style={styles.refreshLocText}>Refresh GPS</Text>
+                <LocationPinIcon size={13} color="#0284c7" />
+              )}
+              <Text style={styles.workModeText}>
+                {isRemote ? 'Remote Attendance' : `On-Site at ${officeName}`}
+              </Text>
+              {isOverride && (
+                <View style={styles.overrideBadge}>
+                  <Text style={styles.overrideBadgeText}>Override</Text>
                 </View>
               )}
-            </TouchableOpacity>
+            </View>
           </View>
-
-          {locError ? (
-            <View style={styles.errorBox}>
-              <AlertIcon size={16} color="#dc2626" />
-              <Text style={styles.errorText}>{locError}</Text>
-            </View>
-          ) : isRemote ? (
-            <View style={styles.statusBoxInfo}>
-              <View style={styles.inlineRow}>
-                <GlobeIcon size={15} color="#1e40af" />
-                <Text style={styles.statusBoxTitle}>Geofence Constraint Waived</Text>
-              </View>
-              <Text style={styles.statusBoxSubtitle}>
-                GPS Coordinates recorded for audit trail: {coords ? `${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}` : 'Detecting...'}
-              </Text>
-            </View>
-          ) : isWithinGeofence ? (
-            <View style={styles.statusBoxSuccess}>
-              <View style={styles.inlineRow}>
-                <CheckIcon size={15} color="#059669" />
-                <Text style={styles.statusBoxTitleSuccess}>Inside Office Zone ({distanceMeters?.toFixed(0)}m)</Text>
-              </View>
-              <Text style={styles.statusBoxSubtitleSuccess}>
-                Authorized to mark attendance at {officeName}
-              </Text>
-            </View>
-          ) : (
-            <View style={styles.statusBoxWarning}>
-              <View style={styles.inlineRow}>
-                <AlertIcon size={15} color="#b45309" />
-                <Text style={styles.statusBoxTitleWarning}>Outside Office Zone ({distanceMeters?.toFixed(0)}m)</Text>
-              </View>
-              <Text style={styles.statusBoxSubtitleWarning}>
-                Move within {radiusMeters}m of {officeName} to verify
-              </Text>
-            </View>
-          )}
         </View>
-      </View>
 
-      {/* Today Attendance Action Card */}
-      <View style={styles.card}>
-        <Text style={styles.cardSectionTitle}>TODAY'S VERIFICATION STATUS</Text>
-
-        {todayAttendance?.is_on_leave && !todayAttendance?.has_checked_in && !todayAttendance?.checked_in ? (
-          <View style={styles.leaveExemptBox}>
-            <View style={styles.inlineRow}>
+        {/* Dynamic Status Section */}
+        {todayAttendance?.is_on_leave && !hasCheckedIn ? (
+          <View style={styles.leaveBanner}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <CheckIcon size={18} color="#059669" />
-              <Text style={styles.leaveExemptTitle}>Approved Leave Active Today</Text>
+              <Text style={styles.leaveBannerTitle}>On Approved Leave Today</Text>
             </View>
-            <Text style={styles.leaveExemptSubtitle}>
-              Reason: "{todayAttendance.leave_reason || 'Personal time off'}". You are officially exempt from attendance check-in today.
+            <Text style={styles.leaveBannerSub}>
+              {todayAttendance.leave_reason ? `Reason: "${todayAttendance.leave_reason}"` : 'You are exempt from daily check-in.'}
             </Text>
-            <TouchableOpacity style={styles.optionalScanBtn} onPress={handleFaceScanTrigger}>
-              <Text style={styles.optionalScanBtnText}>Punch In Voluntarily</Text>
-            </TouchableOpacity>
           </View>
-        ) : todayAttendance?.has_checked_in || todayAttendance?.checked_in ? (
-          <View style={styles.checkedInBox}>
-            <View style={styles.checkedInRow}>
-              <View style={styles.inlineRow}>
-                <CheckIcon size={18} color="#059669" />
-                <Text style={styles.checkedInText}>Present</Text>
+        ) : hasCheckedIn ? (
+          <View style={styles.activeAttendanceBox}>
+            <View style={styles.timeInfoRow}>
+              <View style={styles.timeCol}>
+                <Text style={styles.timeColLabel}>CHECK-IN</Text>
+                <Text style={styles.timeColValue}>
+                  {record?.check_in_time
+                    ? new Date(record.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    : 'Recorded'}
+                </Text>
+                {record?.is_late && (
+                  <View style={styles.latePill}>
+                    <Text style={styles.latePillText}>+{record.minutes_late}m late</Text>
+                  </View>
+                )}
               </View>
-              <Text style={styles.checkInTimeText}>
-                {new Date(todayAttendance.record?.check_in_time).toLocaleTimeString()}
-              </Text>
+
+              <View style={styles.timeColDivider} />
+
+              <View style={styles.timeCol}>
+                <Text style={styles.timeColLabel}>CHECK-OUT</Text>
+                <Text style={styles.timeColValue}>
+                  {hasCheckedOut && record?.check_out_time
+                    ? new Date(record.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    : '--:--'}
+                </Text>
+                {hasCheckedOut && (
+                  <View style={styles.completedPill}>
+                    <Text style={styles.completedPillText}>Completed</Text>
+                  </View>
+                )}
+              </View>
             </View>
 
-            {!todayAttendance?.checked_out && !todayAttendance?.has_checked_out ? (
-              <TouchableOpacity style={styles.checkoutButton} onPress={handleCheckOut}>
-                <Text style={styles.checkoutButtonText}>Check Out for the Day</Text>
-              </TouchableOpacity>
+            {hasCheckedOut ? (
+              <View style={styles.durationBanner}>
+                <ClockIcon size={15} color="#0284c7" />
+                <Text style={styles.durationBannerText}>
+                  Total Time Worked: <Text style={{ fontWeight: '800' }}>{record?.hours_worked || 0} hours</Text>
+                </Text>
+              </View>
             ) : (
-              <View style={styles.completedBox}>
-                <CheckIcon size={14} color="#059669" />
-                <Text style={styles.completedText}>
-                  Day Completed {todayAttendance?.record?.check_out_time ? `• Out at ${new Date(todayAttendance.record.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '(Checked out)'}
+              <TouchableOpacity style={styles.checkoutBtn} onPress={handleCheckOut}>
+                <Text style={styles.checkoutBtnText}>Check Out for the Day</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : (
+          <View style={styles.scanSection}>
+            <TouchableOpacity
+              style={[
+                styles.primaryScanBtn,
+                !isRemote && isWithinGeofence === false && styles.primaryScanBtnDisabled,
+              ]}
+              onPress={handleFaceScanTrigger}
+              disabled={!isRemote && isWithinGeofence === false}
+            >
+              <CameraIcon size={20} color="#ffffff" />
+              <Text style={styles.primaryScanBtnText}>Scan Face to Check In</Text>
+            </TouchableOpacity>
+
+            {!isRemote && isWithinGeofence === false && (
+              <View style={styles.outOfBoundsNotice}>
+                <AlertIcon size={13} color="#b45309" />
+                <Text style={styles.outOfBoundsNoticeText}>
+                  Connect from within {officeName} to enable check-in.
                 </Text>
               </View>
             )}
           </View>
-        ) : (
-          <TouchableOpacity
-            style={[
-              styles.scanButton,
-              !isRemote && isWithinGeofence === false && styles.scanButtonDisabled,
-            ]}
-            onPress={handleFaceScanTrigger}
-            disabled={!isRemote && isWithinGeofence === false}
-          >
-            <CameraIcon size={20} color="#ffffff" />
-            <Text style={styles.scanButtonText}>
-              {!isRemote && isWithinGeofence === false
-                ? `Outside ${radiusMeters}m Zone (${distanceMeters?.toFixed(0)}m)`
-                : 'Scan Face to Check In'}
-            </Text>
-          </TouchableOpacity>
         )}
       </View>
+
+      {/* Quick Access Card: Monthly Attendance Calendar */}
+      <TouchableOpacity
+        style={styles.calendarBannerCard}
+        onPress={() => setShowCalendarModal(true)}
+        activeOpacity={0.8}
+      >
+        <View style={styles.calendarBannerLeft}>
+          <View style={styles.calendarIconBox}>
+            <CalendarIcon size={20} color="#0284c7" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.calendarBannerTitle}>My Attendance Calendar</Text>
+            <Text style={styles.calendarBannerSub}>
+              View monthly hours, working days, and clock in/out timeline
+            </Text>
+          </View>
+        </View>
+        <ChevronRightIcon size={18} color="#94a3b8" />
+      </TouchableOpacity>
 
       {/* Time Off & Leave Requests */}
       <View style={styles.card}>
@@ -413,7 +412,7 @@ export default function EmployeePortal({
             onPress={() => setShowLeaveForm(!showLeaveForm)}
           >
             <Text style={styles.requestLeaveToggleText}>
-              {showLeaveForm ? 'Close Form' : '+ Request Leave'}
+              {showLeaveForm ? 'Close' : '+ Request Leave'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -431,7 +430,7 @@ export default function EmployeePortal({
               style={[styles.input, { height: 60, textAlignVertical: 'top' }]}
               value={leaveReason}
               onChangeText={setLeaveReason}
-              placeholder="Medical appointment, family event, personal day..."
+              placeholder="e.g. Medical, personal appointment, travel..."
               placeholderTextColor="#94a3b8"
               multiline
             />
@@ -450,7 +449,7 @@ export default function EmployeePortal({
                 <Text style={styles.submitLeaveBtnText}>
                   {selectedLeaveDates.length === 0
                     ? 'Select Dates on Calendar'
-                    : `Submit Leave Request (${selectedLeaveDates.length} ${
+                    : `Submit Request (${selectedLeaveDates.length} ${
                         selectedLeaveDates.length === 1 ? 'Day' : 'Days'
                       })`}
                 </Text>
@@ -460,9 +459,9 @@ export default function EmployeePortal({
         )}
 
         {leavesList.length === 0 ? (
-          <Text style={styles.emptyText}>No submitted leave requests yet.</Text>
+          <Text style={styles.emptyText}>No leave requests submitted yet.</Text>
         ) : (
-          leavesList.slice(0, 5).map(lv => (
+          leavesList.slice(0, 3).map(lv => (
             <View key={lv.id} style={styles.leaveHistoryRow}>
               <View style={{ flex: 1, marginRight: 8 }}>
                 <Text style={styles.leaveDateRange}>
@@ -500,61 +499,61 @@ export default function EmployeePortal({
         )}
       </View>
 
-      {/* Attendance History */}
+      {/* Recent Attendance Activity (Clean Duration / Times Only - No Coordinates) */}
       <View style={styles.card}>
-        <Text style={styles.cardSectionTitle}>ATTENDANCE LOG HISTORY</Text>
+        <View style={styles.cardHeader}>
+          <Text style={styles.cardSectionTitle}>RECENT ATTENDANCE</Text>
+          <TouchableOpacity onPress={() => setShowCalendarModal(true)}>
+            <Text style={styles.viewAllText}>View Calendar</Text>
+          </TouchableOpacity>
+        </View>
+
         {history.length === 0 ? (
-          <Text style={styles.emptyText}>No previous attendance records found.</Text>
+          <Text style={styles.emptyText}>No attendance records recorded yet.</Text>
         ) : (
-          history.slice(0, 5).map((rec: any) => (
+          history.slice(0, 4).map((rec: any) => (
             <View key={rec.id} style={styles.historyRow}>
               <View>
                 <Text style={styles.historyDate}>{rec.date}</Text>
-                <View style={[styles.inlineRow, { marginTop: 2 }]}>
-                  {rec.verification_type === 'face_geo' ? (
-                    <LocationPinIcon size={12} color="#64748b" />
-                  ) : (
-                    <GlobeIcon size={12} color="#64748b" />
-                  )}
-                  <Text style={styles.historyType}>
-                    {rec.verification_type === 'face_geo' ? 'Face + Geofence' : 'Face Remote'}
-                  </Text>
-                </View>
+                <Text style={styles.historyMode}>
+                  {rec.verification_type === 'face_geo' ? 'On-Site' : 'Remote'}
+                </Text>
               </View>
               <View style={{ alignItems: 'flex-end' }}>
                 <Text style={styles.historyTime}>
-                  {new Date(rec.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  In: {new Date(rec.check_in_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {rec.check_out_time ? ` • Out: ${new Date(rec.check_out_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
                 </Text>
-                <Text style={styles.historyScore}>{(rec.similarity_score * 100).toFixed(0)}% match</Text>
+                {rec.hours_worked != null && (
+                  <Text style={styles.historyWorked}>{rec.hours_worked} hrs</Text>
+                )}
               </View>
             </View>
           ))
         )}
       </View>
 
-      {/* Biometric Reference Enrollment CTA */}
-      {onOpenEnrollment && (
-        <TouchableOpacity style={styles.enrollmentCTA} onPress={onOpenEnrollment}>
-          <UserIcon size={18} color="#0f172a" />
-          <Text style={styles.enrollmentCTAText}>Update Face Biometric Reference</Text>
-        </TouchableOpacity>
-      )}
+      {/* Monthly Attendance Calendar Modal */}
+      <AttendanceCalendarModal
+        visible={showCalendarModal}
+        onClose={() => setShowCalendarModal(false)}
+        userId={user.id}
+        employeeName={user.full_name}
+        employeeCode={user.employee_code}
+      />
 
-      {/* Account Deletion & Privacy Policy (Apple Review Guideline 5.1.1(v) Compliance) */}
-      <View style={styles.complianceCard}>
-        <TouchableOpacity style={styles.deleteAccountBtn} onPress={handleDeleteAccount}>
-          <Text style={styles.deleteAccountBtnText}>Delete My Account & Face Data</Text>
-        </TouchableOpacity>
-        <View style={styles.legalFooterRow}>
-          <TouchableOpacity onPress={() => Linking.openURL('https://face-scan.alpha-devs.cloud/privacy')}>
-            <Text style={styles.legalFooterLink}>Privacy Policy</Text>
-          </TouchableOpacity>
-          <Text style={styles.legalFooterDivider}>•</Text>
-          <TouchableOpacity onPress={() => Linking.openURL('https://face-scan.alpha-devs.cloud/terms')}>
-            <Text style={styles.legalFooterLink}>Terms of Service</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+      {/* Clean Hamburger Menu Modal (Apple 5.1.1(v) Compliant & Clutter-Free) */}
+      <HamburgerMenuModal
+        visible={showHamburger}
+        onClose={() => setShowHamburger(false)}
+        user={user}
+        currentPortal="employee"
+        onSwitchPortal={onSwitchPortal}
+        onOpenCalendar={() => setShowCalendarModal(true)}
+        onOpenEnrollment={onOpenEnrollment}
+        onLogout={onLogout}
+        onDeleteAccount={handleDeleteAccount}
+      />
     </ScrollView>
   );
 }
@@ -565,9 +564,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
   },
   content: {
-    padding: 20,
+    padding: 16,
     paddingTop: 54,
-    paddingBottom: 40,
+    paddingBottom: 36,
   },
   topBar: {
     flexDirection: 'row',
@@ -575,515 +574,425 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
     backgroundColor: '#ffffff',
-    borderRadius: 14,
-    paddingHorizontal: 12,
+    borderRadius: 16,
+    paddingHorizontal: 14,
     paddingVertical: 10,
     borderWidth: 1,
     borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  topBarLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+    marginRight: 8,
   },
   portalLogo: {
     width: 32,
     height: 32,
     borderRadius: 8,
   },
-  greeting: {
-    fontSize: 11,
-    color: '#64748b',
-    fontWeight: '600',
-  },
   userName: {
     fontSize: 14,
     fontWeight: '700',
     color: '#0f172a',
-    letterSpacing: -0.3,
+    letterSpacing: -0.2,
   },
   userCode: {
-    fontSize: 9,
-    color: '#1e3a8a',
-    fontWeight: '700',
-    fontFamily: 'monospace',
-  },
-  logoutBtn: {
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 8,
-  },
-  logoutText: {
     fontSize: 11,
-    fontWeight: '600',
-    color: '#475569',
+    color: '#64748b',
+    marginTop: 1,
+  },
+  topBarRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   switchButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#eff6ff',
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
+    backgroundColor: '#e0f2fe',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
     borderRadius: 8,
-    paddingHorizontal: 9,
-    paddingVertical: 7,
   },
   switchButtonText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#1e3a8a',
+    color: '#0284c7',
+  },
+  menuButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  heroCardHeader: {
+    marginBottom: 14,
+  },
+  todayDateText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+    letterSpacing: -0.3,
+  },
+  workModeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 3,
+  },
+  workModeText: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  overrideBadge: {
+    backgroundColor: '#fef3c7',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+    marginLeft: 4,
+  },
+  overrideBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#b45309',
+  },
+  scanSection: {
+    marginTop: 4,
+  },
+  primaryScanBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#0284c7',
+    paddingVertical: 14,
+    borderRadius: 12,
+    shadowColor: '#0284c7',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  primaryScanBtnDisabled: {
+    backgroundColor: '#94a3b8',
+    shadowOpacity: 0,
+  },
+  primaryScanBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  outOfBoundsNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#fffbeb',
+    padding: 8,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  outOfBoundsNoticeText: {
+    fontSize: 11,
+    color: '#92400e',
+    fontWeight: '600',
+    flex: 1,
+  },
+  activeAttendanceBox: {
+    marginTop: 4,
+  },
+  timeInfoRow: {
+    flexDirection: 'row',
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 10,
+  },
+  timeCol: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  timeColDivider: {
+    width: 1,
+    backgroundColor: '#e2e8f0',
+    marginVertical: 4,
+  },
+  timeColLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+    marginBottom: 2,
+  },
+  timeColValue: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  latePill: {
+    backgroundColor: '#fef3c7',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+    marginTop: 4,
+  },
+  latePillText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#d97706',
+  },
+  completedPill: {
+    backgroundColor: '#d1fae5',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+    marginTop: 4,
+  },
+  completedPillText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  checkoutBtn: {
+    backgroundColor: '#0f172a',
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  checkoutBtnText: {
+    color: '#ffffff',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  durationBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#eff6ff',
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  durationBannerText: {
+    fontSize: 13,
+    color: '#1e40af',
+  },
+  leaveBanner: {
+    backgroundColor: '#ecfdf5',
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+  },
+  leaveBannerTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  leaveBannerSub: {
+    fontSize: 12,
+    color: '#065f46',
+    marginTop: 2,
+  },
+  calendarBannerCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  calendarBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+    marginRight: 8,
+  },
+  calendarIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#e0f2fe',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calendarBannerTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  calendarBannerSub: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 1,
   },
   card: {
     backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 18,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 14,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    marginBottom: 16,
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 1,
   },
   cardHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  modePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#eff6ff',
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-    borderRadius: 20,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  modePillText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#1e3a8a',
-    letterSpacing: 0.5,
-  },
-  overridePill: {
-    backgroundColor: '#fef3c7',
-    borderWidth: 1,
-    borderColor: '#fde68a',
-    borderRadius: 20,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  overridePillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#92400e',
-  },
-  modeDescription: {
-    fontSize: 13,
-    color: '#475569',
-    lineHeight: 18,
-    marginBottom: 14,
-  },
-  locSection: {
-    borderTopWidth: 1,
-    borderTopColor: '#f1f5f9',
-    paddingTop: 12,
-  },
-  locStatusRow: {
-    flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
-  },
-  locStatusLabel: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#64748b',
-    letterSpacing: 0.8,
-  },
-  refreshLocBtn: {
-    padding: 4,
-  },
-  refreshLocText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#1e3a8a',
-  },
-  inlineRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  errorBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#fef2f2',
-    borderWidth: 1,
-    borderColor: '#fecaca',
-    borderRadius: 8,
-    padding: 10,
-  },
-  errorText: {
-    fontSize: 12,
-    color: '#dc2626',
-    flex: 1,
-  },
-  statusBoxInfo: {
-    backgroundColor: '#eff6ff',
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-    borderRadius: 8,
-    padding: 12,
-  },
-  statusBoxTitle: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#1e40af',
-  },
-  statusBoxSubtitle: {
-    fontSize: 11,
-    color: '#3b82f6',
-    marginTop: 4,
-  },
-  statusBoxSuccess: {
-    backgroundColor: '#ecfdf5',
-    borderWidth: 1,
-    borderColor: '#a7f3d0',
-    borderRadius: 8,
-    padding: 12,
-  },
-  statusBoxTitleSuccess: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#065f46',
-  },
-  statusBoxSubtitleSuccess: {
-    fontSize: 11,
-    color: '#059669',
-    marginTop: 4,
-  },
-  statusBoxWarning: {
-    backgroundColor: '#fffbeb',
-    borderWidth: 1,
-    borderColor: '#fde68a',
-    borderRadius: 8,
-    padding: 12,
-  },
-  statusBoxTitleWarning: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#92400e',
-  },
-  statusBoxSubtitleWarning: {
-    fontSize: 11,
-    color: '#b45309',
-    marginTop: 4,
+    marginBottom: 12,
   },
   cardSectionTitle: {
     fontSize: 11,
-    fontWeight: '800',
-    color: '#64748b',
-    letterSpacing: 0.8,
-    marginBottom: 12,
-  },
-  scanButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#0f172a',
-    borderRadius: 10,
-    paddingVertical: 14,
-  },
-  scanButtonDisabled: {
-    backgroundColor: '#cbd5e1',
-  },
-  scanButtonText: {
-    color: '#ffffff',
-    fontSize: 14,
     fontWeight: '700',
-  },
-  checkedInBox: {
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    padding: 14,
-  },
-  checkedInRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  checkedInText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#059669',
-  },
-  checkInTimeText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#475569',
-  },
-  checkoutButton: {
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  checkoutButtonText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
-  completedBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    justifyContent: 'center',
-    paddingVertical: 6,
-  },
-  completedText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#059669',
-  },
-  emptyText: {
-    fontSize: 13,
     color: '#94a3b8',
-    textAlign: 'center',
-    paddingVertical: 12,
-  },
-  historyRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  historyDate: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
-  historyType: {
-    fontSize: 11,
-    color: '#64748b',
-  },
-  historyTime: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#334155',
-  },
-  historyScore: {
-    fontSize: 11,
-    color: '#059669',
-    fontWeight: '600',
-  },
-  enrollmentCTA: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 10,
-    paddingVertical: 12,
-    marginTop: 4,
-  },
-  enrollmentCTAText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
-  leaveExemptBox: {
-    backgroundColor: '#ecfdf5',
-    borderWidth: 1,
-    borderColor: '#a7f3d0',
-    borderRadius: 12,
-    padding: 14,
-  },
-  leaveExemptTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#065f46',
-  },
-  leaveExemptSubtitle: {
-    fontSize: 12,
-    color: '#047857',
-    marginTop: 4,
-    lineHeight: 18,
-  },
-  optionalScanBtn: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#6ee7b7',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  optionalScanBtnText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#065f46',
+    letterSpacing: 0.6,
   },
   requestLeaveToggle: {
     backgroundColor: '#eff6ff',
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-    borderRadius: 8,
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
     paddingVertical: 4,
+    borderRadius: 6,
   },
   requestLeaveToggleText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#1e3a8a',
+    color: '#0284c7',
+  },
+  viewAllText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0284c7',
   },
   leaveForm: {
     backgroundColor: '#f8fafc',
+    padding: 12,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 14,
+    marginBottom: 12,
   },
   formLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#475569',
-    marginBottom: 4,
-    marginTop: 6,
+    color: '#64748b',
+    marginBottom: 6,
   },
   input: {
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#cbd5e1',
     borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    padding: 10,
     fontSize: 13,
     color: '#0f172a',
+    marginBottom: 12,
   },
   submitLeaveBtn: {
-    backgroundColor: '#1e3a8a',
-    borderRadius: 8,
+    backgroundColor: '#0284c7',
     paddingVertical: 10,
+    borderRadius: 8,
     alignItems: 'center',
-    marginTop: 12,
   },
   submitLeaveBtnDisabled: {
     backgroundColor: '#94a3b8',
-    opacity: 0.7,
   },
   submitLeaveBtnText: {
     color: '#ffffff',
+    fontSize: 12,
     fontWeight: '700',
-    fontSize: 13,
+  },
+  emptyText: {
+    fontSize: 12,
+    color: '#94a3b8',
+    fontStyle: 'italic',
+    paddingVertical: 6,
   },
   leaveHistoryRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 10,
+    justifyContent: 'space-between',
+    paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    borderColor: '#f1f5f9',
   },
   leaveDateRange: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     color: '#0f172a',
   },
   leaveReasonText: {
     fontSize: 11,
     color: '#64748b',
-    marginTop: 2,
+    marginTop: 1,
   },
   leaveStatusPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-    borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 4,
   },
-  pillApproved: {
-    backgroundColor: '#ecfdf5',
-    borderColor: '#a7f3d0',
-  },
-  pillApprovedText: {
-    color: '#059669',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  pillRejected: {
-    backgroundColor: '#fef2f2',
-    borderColor: '#fecaca',
-  },
-  pillRejectedText: {
-    color: '#dc2626',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  pillPending: {
-    backgroundColor: '#fffbeb',
-    borderColor: '#fde68a',
-  },
-  pillPendingText: {
-    color: '#d97706',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  leaveStatusPillText: {
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  complianceCard: {
-    marginTop: 20,
-    alignItems: 'center',
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
-  },
-  deleteAccountBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#fca5a5',
-    backgroundColor: '#fef2f2',
-    marginBottom: 16,
-  },
-  deleteAccountBtnText: {
-    color: '#dc2626',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  legalFooterRow: {
+  pillApproved: { backgroundColor: '#d1fae5' },
+  pillRejected: { backgroundColor: '#fee2e2' },
+  pillPending: { backgroundColor: '#fef3c7' },
+  leaveStatusPillText: { fontSize: 9, fontWeight: '800' },
+  pillApprovedText: { color: '#059669' },
+  pillRejectedText: { color: '#dc2626' },
+  pillPendingText: { color: '#d97706' },
+  historyRow: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderColor: '#f1f5f9',
   },
-  legalFooterLink: {
-    fontSize: 12,
+  historyDate: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  historyMode: {
+    fontSize: 11,
     color: '#64748b',
-    fontWeight: '600',
-    textDecorationLine: 'underline',
+    marginTop: 1,
   },
-  legalFooterDivider: {
+  historyTime: {
     fontSize: 12,
-    color: '#cbd5e1',
+    color: '#334155',
+    fontWeight: '600',
+  },
+  historyWorked: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0284c7',
+    marginTop: 1,
   },
 });

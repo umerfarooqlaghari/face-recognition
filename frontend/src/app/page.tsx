@@ -5736,11 +5736,11 @@ export default function Home() {
                 <div style={{ fontSize: 12, color: "#64748b" }}>
                   <span>Shift: </span>
                   <strong style={{ color: "#0f172a" }}>
-                    {calendarData?.resolved_shift?.shift_name || "Office Shift"} (
-                    {calendarData?.resolved_shift?.work_start_time || "09:00"} -{" "}
-                    {calendarData?.resolved_shift?.work_end_time || "18:00"})
+                    {calendarData?.shift_name || calendarData?.resolved_shift?.shift_name || "Office Shift"} (
+                    {calendarData?.scheduled_start_time || calendarData?.resolved_shift?.work_start_time || "09:00"} -{" "}
+                    {calendarData?.scheduled_end_time || calendarData?.resolved_shift?.work_end_time || "18:00"})
                   </strong>
-                  <span> • {calendarData?.resolved_shift?.grace_period_minutes ?? 15}m grace ({calendarData?.timezone || "UTC"})</span>
+                  <span> • {calendarData?.grace_period_minutes ?? calendarData?.resolved_shift?.grace_period_minutes ?? 15}m grace ({calendarData?.timezone || "UTC"})</span>
                 </div>
               </div>
 
@@ -5750,37 +5750,37 @@ export default function Home() {
                   <div className={styles.calendarMetricCard}>
                     <span className={styles.calendarMetricLabel}>Present Days</span>
                     <span className={styles.calendarMetricValue} style={{ color: "#059669" }}>
-                      {calendarData.summary.days_present}
+                      {calendarData.summary.present_days ?? calendarData.summary.days_present ?? 0}
                     </span>
                   </div>
                   <div className={styles.calendarMetricCard}>
                     <span className={styles.calendarMetricLabel}>Late Check-Ins</span>
                     <span className={styles.calendarMetricValue} style={{ color: "#d97706" }}>
-                      {calendarData.summary.days_late}
+                      {calendarData.summary.late_days ?? calendarData.summary.days_late ?? 0}
                     </span>
                   </div>
                   <div className={styles.calendarMetricCard}>
                     <span className={styles.calendarMetricLabel}>Absences</span>
                     <span className={styles.calendarMetricValue} style={{ color: "#dc2626" }}>
-                      {calendarData.summary.days_absent}
+                      {calendarData.summary.absent_days ?? calendarData.summary.days_absent ?? 0}
                     </span>
                   </div>
                   <div className={styles.calendarMetricCard}>
                     <span className={styles.calendarMetricLabel}>Approved Leaves</span>
                     <span className={styles.calendarMetricValue} style={{ color: "#7c3aed" }}>
-                      {calendarData.summary.days_on_leave}
+                      {calendarData.summary.leave_days ?? calendarData.summary.days_on_leave ?? 0}
                     </span>
                   </div>
                   <div className={styles.calendarMetricCard}>
                     <span className={styles.calendarMetricLabel}>Hours Worked</span>
                     <span className={styles.calendarMetricValue} style={{ color: "#0284c7" }}>
-                      {calendarData.summary.total_hours_worked}h
+                      {calendarData.summary.total_hours_worked ?? 0}h
                     </span>
                   </div>
                   <div className={styles.calendarMetricCard}>
                     <span className={styles.calendarMetricLabel}>On-Time Arrival</span>
                     <span className={styles.calendarMetricValue} style={{ color: "#0f172a" }}>
-                      {calendarData.summary.on_time_rate_pct}%
+                      {calendarData.summary.on_time_rate_pct ?? 0}%
                     </span>
                   </div>
                 </div>
@@ -5819,7 +5819,12 @@ export default function Home() {
                       if (day.status === "present") badgeClass = styles.statusBadgePresent;
                       else if (day.status === "late") badgeClass = styles.statusBadgeLate;
                       else if (day.status === "absent") badgeClass = styles.statusBadgeAbsent;
-                      else if (day.status === "leave") badgeClass = styles.statusBadgeLeave;
+                      else if (day.status === "on_leave" || day.status === "leave") badgeClass = styles.statusBadgeLeave;
+
+                      const isUpcoming = day.status === "upcoming" || day.is_future;
+                      const checkIn = day.check_in_time || day.check_in_local;
+                      const checkOut = day.check_out_time || day.check_out_local;
+                      const dayNumber = day.day ?? day.day_of_month;
 
                       return (
                         <div
@@ -5827,26 +5832,26 @@ export default function Home() {
                           className={`${styles.calendarDayCell} ${day.is_weekend ? styles.calendarDayCellWeekend : ""} ${isToday ? styles.calendarDayCellToday : ""}`}
                         >
                           <div className={styles.calendarDayTop}>
-                            <span className={styles.calendarDayNum}>{day.day_of_month}</span>
-                            {!day.is_future && (
+                            <span className={styles.calendarDayNum}>{dayNumber}</span>
+                            {!isUpcoming && (
                               <span className={`${styles.calendarDayStatusBadge} ${badgeClass}`}>
-                                {day.status}
+                                {day.status === "on_leave" ? "Leave" : day.status}
                               </span>
                             )}
                           </div>
 
-                          {!day.is_future && (
+                          {!isUpcoming && (
                             <div className={styles.calendarDayTimes}>
-                              {day.check_in_local ? (
+                              {checkIn ? (
                                 <div>
-                                  <div>In: <strong>{day.check_in_local}</strong></div>
-                                  <div>Out: {day.check_out_local || "—"}</div>
+                                  <div>In: <strong>{checkIn}</strong></div>
+                                  <div>Out: {checkOut || "—"}</div>
                                   {day.is_late && (
                                     <div style={{ color: "#d97706", fontSize: 9 }}>+{day.minutes_late}m late</div>
                                   )}
                                 </div>
-                              ) : day.is_on_leave ? (
-                                <div style={{ color: "#7c3aed" }}>{day.leave_type || "On Leave"}</div>
+                              ) : (day.status === "on_leave" || day.is_on_leave) ? (
+                                <div style={{ color: "#7c3aed" }}>{day.leave_reason || day.leave_type || "On Leave"}</div>
                               ) : day.is_weekend ? (
                                 <div style={{ color: "#94a3b8" }}>Weekend</div>
                               ) : (
@@ -5857,7 +5862,7 @@ export default function Home() {
 
                           {day.hours_worked != null && day.hours_worked > 0 && (
                             <div className={styles.calendarDayHours}>
-                              {day.hours_worked} hrs
+                              {day.hours_worked_formatted || `${day.hours_worked} hrs`}
                             </div>
                           )}
                         </div>

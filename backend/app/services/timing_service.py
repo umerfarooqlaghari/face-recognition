@@ -222,3 +222,52 @@ def format_hours_worked(hours: Optional[float]) -> Optional[str]:
     if m == 0:
         return f"{h}h"
     return f"{h}h {m}m"
+
+def check_employee_grace_status(
+    now_utc: datetime,
+    shift_config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Evaluates whether the given moment falls within the employee's active grace period.
+    Grace window is defined as [scheduled_start, scheduled_start + grace_period_minutes].
+    """
+    tz_str = shift_config.get("timezone", "UTC")
+    local_tz = get_safe_zoneinfo(tz_str)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    local_now = now_utc.astimezone(local_tz)
+
+    start_h, start_m = parse_time_str(shift_config.get("work_start_time"), 9, 0)
+    end_h, end_m = parse_time_str(shift_config.get("work_end_time"), 18, 0)
+    grace_minutes = shift_config.get("grace_period_minutes", 15)
+
+    is_overnight = (start_h > end_h) or (start_h == end_h and start_m > end_m)
+
+    if not is_overnight:
+        scheduled_start_dt = local_now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+    else:
+        if local_now.hour < (end_h + 3):
+            yesterday = local_now - timedelta(days=1)
+            scheduled_start_dt = yesterday.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+        else:
+            scheduled_start_dt = local_now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+
+    grace_cutoff_dt = scheduled_start_dt + timedelta(minutes=grace_minutes)
+
+    in_grace_period = scheduled_start_dt <= local_now <= grace_cutoff_dt
+    past_grace = local_now > grace_cutoff_dt
+    before_shift = local_now < scheduled_start_dt
+
+    return {
+        "in_grace_period": in_grace_period,
+        "past_grace": past_grace,
+        "before_shift": before_shift,
+        "local_now": local_now,
+        "local_date": local_now.date(),
+        "scheduled_start_dt": scheduled_start_dt,
+        "scheduled_start_str": scheduled_start_dt.strftime("%I:%M %p"),
+        "grace_cutoff_dt": grace_cutoff_dt,
+        "grace_cutoff_str": grace_cutoff_dt.strftime("%I:%M %p"),
+        "grace_period_minutes": grace_minutes,
+        "timezone": tz_str
+    }

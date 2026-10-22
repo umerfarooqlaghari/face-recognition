@@ -411,19 +411,24 @@ async def create_employee(
             pass
 
     # Dispatch Welcome Email via AWS SES
+    base_frontend = (settings.FRONTEND_URL or "http://localhost:3000").rstrip("/")
+    invite_url = f"{base_frontend}/enroll?token={invite_token}"
+
     email_dispatch = await send_employee_welcome_email(
         to_email=new_user.email,
         employee_name=new_user.full_name,
         employee_code=new_user.employee_code,
         temporary_password=temp_password,
         company_name=company_name,
-        invite_token=invite_token
+        invite_token=invite_token,
+        invite_url=invite_url
     )
 
     return EmployeeCreateResponse(
         user=UserResponse.model_validate(new_user),
         auto_generated_password=temp_password,
         invite_token=invite_token,
+        invite_url=invite_url,
         email_dispatch=email_dispatch
     )
 
@@ -463,19 +468,24 @@ async def resend_employee_invite(
     tenant = tenant_res.scalar_one_or_none()
     company_name = tenant.name if tenant else "Attendance Platform"
 
+    base_frontend = (settings.FRONTEND_URL or "http://localhost:3000").rstrip("/")
+    invite_url = f"{base_frontend}/enroll?token={invite_token}"
+
     dispatch = await send_employee_welcome_email(
         to_email=employee.email,
         employee_name=employee.full_name,
         employee_code=employee.employee_code,
         temporary_password=new_temp_pwd,
         company_name=company_name,
-        invite_token=invite_token
+        invite_token=invite_token,
+        invite_url=invite_url
     )
 
     return {
         "status": "success",
         "temporary_password": new_temp_pwd,
         "invite_token": invite_token,
+        "invite_url": invite_url,
         "email_dispatch": dispatch
     }
 
@@ -1051,6 +1061,8 @@ async def import_employees_csv(
 
             # Dispatch Welcome Email
             try:
+                base_frontend = (settings.FRONTEND_URL or "http://localhost:3000").rstrip("/")
+                b_invite_url = f"{base_frontend}/enroll?token={invite_token}"
                 await send_employee_welcome_email(
                     to_email=clean_email,
                     employee_name=full_name,
@@ -1058,6 +1070,7 @@ async def import_employees_csv(
                     temporary_password=temp_password,
                     company_name=company_name,
                     invite_token=invite_token,
+                    invite_url=b_invite_url,
                 )
             except Exception:
                 pass

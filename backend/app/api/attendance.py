@@ -16,11 +16,13 @@ from app.services.timing_service import (
     calculate_lateness,
     format_time_local,
     format_hours_worked,
-    get_safe_zoneinfo
+    get_safe_zoneinfo,
+    check_employee_grace_status
 )
 from app.services.email_service import (
     send_late_employee_email,
-    send_late_digest_email
+    send_late_digest_email,
+    send_grace_period_reminder_email
 )
 from app.schemas.attendance import (
     AttendanceCheckInResponse,
@@ -34,7 +36,9 @@ from app.schemas.attendance import (
     AttendanceRegularizationCreate,
     AttendanceRegularizationReview,
     AttendanceRegularizationResponse,
-    TimesheetItemResponse
+    TimesheetItemResponse,
+    GraceReminderAuditResponse,
+    GraceReminderEmployeeItem
 )
 
 router = APIRouter(prefix="/attendance", tags=["Attendance"])
@@ -1018,6 +1022,136 @@ async def send_daily_late_digest(
         late_count=len(late_items),
         recipients=recipient_emails,
         message=f"Late arrivals digest dispatched to {len(recipient_emails)} recipient(s) for {len(late_items)} late employee(s)."
+    )
+
+# Dispatched reminder registry to avoid duplicate emails within the same local date
+_dispatched_grace_reminders = set()
+
+@router.post("/reminders/grace-check", response_model=GraceReminderAuditResponse)
+async def check_and_route_grace_period_reminders(
+    force: bool = False,
+    current_admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Evaluates all active employees in the tenant:
+    1. Determines their localized shift schedule and grace period window.
+    2. Checks if current time is within active grace period (or forced).
+    3. Checks if already checked in today (if yes -> skips).
+    4. Checks if on approved leave today (if yes -> skips).
+    5. Dispatches an executive grace period reminder email via AWS SES.
+    """
+    tenant_res = await db.execute(select(Tenant).where(Tenant.id == current_admin.tenant_id))
+    tenant = tenant_res.scalar_one_or_none()
+    company_name = tenant.name if tenant else "Attendance Platform"
+
+    # Query active employees and their assigned office
+    stmt = (
+        select(User, Office)
+        .outerjoin(Office, User.office_id == Office.id)
+        .where(
+            User.tenant_id == current_admin.tenant_id,
+            User.is_active == True
+        )
+    )
+    res = await db.execute(stmt)
+    employees = res.all()
+
+    now_utc = datetime.now(timezone.utc)
+    reminded_employees = []
+    skipped_on_leave = []
+    skipped_checked_in = []
+    skipped_outside_window = 0
+
+    for usr, off in employees:
+        shift_cfg = resolve_employee_shift_config(usr, off, tenant)
+        grace_status = check_employee_grace_status(now_utc, shift_cfg)
+        local_date = grace_status["local_date"]
+
+        # 1. Check if within grace window
+        if not grace_status["in_grace_period"] and not force:
+            skipped_outside_window += 1
+            continue
+
+        # 2. Check if already checked in today
+        att_res = await db.execute(
+            select(AttendanceRecord).where(
+                AttendanceRecord.tenant_id == current_admin.tenant_id,
+                AttendanceRecord.user_id == usr.id,
+                AttendanceRecord.date == local_date
+            )
+        )
+        if att_res.scalar_one_or_none():
+            skipped_checked_in.append({
+                "user_id": str(usr.id),
+                "name": usr.full_name,
+                "code": usr.employee_code,
+                "reason": "Already checked in today"
+            })
+            continue
+
+        # 3. Check if user is on approved leave today
+        leave_res = await db.execute(
+            select(Leave).where(
+                Leave.tenant_id == current_admin.tenant_id,
+                Leave.user_id == usr.id,
+                Leave.status == "approved",
+                Leave.start_date <= local_date,
+                Leave.end_date >= local_date
+            )
+        )
+        approved_leave = leave_res.scalar_one_or_none()
+        if approved_leave:
+            skipped_on_leave.append({
+                "user_id": str(usr.id),
+                "name": usr.full_name,
+                "code": usr.employee_code,
+                "reason": f"On approved leave ({approved_leave.reason}) from {approved_leave.start_date.isoformat()} to {approved_leave.end_date.isoformat()}"
+            })
+            continue
+
+        # 4. Check duplicate dispatch
+        reminder_key = f"{usr.id}_{local_date.isoformat()}"
+        if reminder_key in _dispatched_grace_reminders and not force:
+            continue
+
+        # 5. Dispatch reminder email
+        dispatch_res = await send_grace_period_reminder_email(
+            to_email=usr.email,
+            employee_name=usr.full_name,
+            employee_code=usr.employee_code,
+            scheduled_start_str=grace_status["scheduled_start_str"],
+            grace_cutoff_str=grace_status["grace_cutoff_str"],
+            grace_period_minutes=grace_status["grace_period_minutes"],
+            company_name=company_name,
+            shift_name=shift_cfg["shift_name"]
+        )
+
+        _dispatched_grace_reminders.add(reminder_key)
+        reminded_employees.append(
+            GraceReminderEmployeeItem(
+                user_id=usr.id,
+                employee_name=usr.full_name,
+                employee_code=usr.employee_code,
+                email=usr.email,
+                shift_name=shift_cfg["shift_name"],
+                scheduled_start=grace_status["scheduled_start_str"],
+                grace_cutoff=grace_status["grace_cutoff_str"],
+                grace_period_minutes=grace_status["grace_period_minutes"],
+                status=dispatch_res.get("status", "sent")
+            )
+        )
+
+    return GraceReminderAuditResponse(
+        status="success",
+        evaluated_at=now_utc,
+        total_evaluated=len(employees),
+        reminders_dispatched=len(reminded_employees),
+        reminded_employees=reminded_employees,
+        skipped_on_approved_leave=skipped_on_leave,
+        skipped_already_checked_in=skipped_checked_in,
+        skipped_outside_grace_window=skipped_outside_window,
+        message=f"Grace audit completed: {len(reminded_employees)} reminder(s) dispatched, {len(skipped_on_leave)} skipped on approved leave, {len(skipped_checked_in)} already checked in."
     )
 
 

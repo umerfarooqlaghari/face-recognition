@@ -282,12 +282,10 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_tokens(req: RefreshTokenRequest, db: AsyncSession = Depends(get_db)):
     incoming_hash = hash_token(req.refresh_token)
-    device_res = await db.execute(
-        select(UserDevice).where(
-            UserDevice.device_id == req.device_id,
-            UserDevice.refresh_token_hash == incoming_hash
-        )
-    )
+    stmt = select(UserDevice).where(UserDevice.refresh_token_hash == incoming_hash)
+    if req.device_id:
+        stmt = stmt.where(UserDevice.device_id == req.device_id)
+    device_res = await db.execute(stmt)
     device = device_res.scalar_one_or_none()
     if not device:
         raise HTTPException(

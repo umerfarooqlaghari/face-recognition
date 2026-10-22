@@ -118,6 +118,7 @@ class EmployeeCreateResponse(BaseModel):
     user: UserResponse
     auto_generated_password: str
     invite_token: str
+    invite_url: Optional[str] = None
     email_dispatch: Dict[str, Any]
 
 class TenantStatsResponse(BaseModel):

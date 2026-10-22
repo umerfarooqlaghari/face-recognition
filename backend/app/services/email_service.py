@@ -12,7 +12,8 @@ def generate_welcome_email_html(
     email: str,
     temporary_password: str,
     company_name: str,
-    invite_token: Optional[str] = None
+    invite_token: Optional[str] = None,
+    invite_url: Optional[str] = None
 ) -> str:
     """
     Generate an executive Navy Blue and White HTML email template.
@@ -20,15 +21,37 @@ def generate_welcome_email_html(
     """
     enrollment_section = ""
     if invite_token:
+        resolved_url = invite_url or f"{settings.FRONTEND_URL.rstrip('/')}/enroll?token={invite_token}"
         enrollment_section = f"""
-        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin-top: 24px;">
-            <p style="margin: 0 0 8px 0; color: #0f172a; font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Biometric Face Enrollment</p>
-            <p style="margin: 0 0 12px 0; color: #475569; font-size: 14px; line-height: 1.5;">
-                You have been issued a secure enrollment key for 3D Face Verification. Please complete enrollment within 48 hours.
+        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 24px; margin-top: 24px;">
+            <p style="margin: 0 0 8px 0; color: #0f172a; font-weight: 700; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Biometric Face Scan Enrollment</p>
+            <p style="margin: 0 0 16px 0; color: #475569; font-size: 14px; line-height: 1.5;">
+                You have been issued a 48-hour secure face enrollment link. Click the button below to complete 3D facial verification directly from your phone camera or browser:
             </p>
-            <div style="background-color: #ffffff; border: 1px dashed #cbd5e1; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 15px; color: #1e3a8a; font-weight: 700; word-break: break-all;">
+            
+            <div style="text-align: center; margin: 18px 0;">
+                <a href="{resolved_url}" style="display: inline-block; background-color: #0284c7; color: #ffffff; text-decoration: none; padding: 13px 28px; border-radius: 8px; font-weight: 700; font-size: 14px; letter-spacing: 0.3px; box-shadow: 0 2px 4px rgba(2, 132, 199, 0.25);">
+                    Complete Face Scan Enrollment &rarr;
+                </a>
+            </div>
+
+            <p style="margin: 14px 0 6px 0; font-size: 12px; color: #64748b;">
+                Direct Shareable Link:
+            </p>
+            <div style="background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 12px; font-family: monospace; font-size: 13px; color: #0284c7; word-break: break-all;">
+                <a href="{resolved_url}" style="color: #0284c7; text-decoration: underline;">{resolved_url}</a>
+            </div>
+
+            <p style="margin: 14px 0 6px 0; font-size: 12px; color: #64748b;">
+                Enrollment Security Token:
+            </p>
+            <div style="background-color: #ffffff; border: 1px dashed #cbd5e1; border-radius: 6px; padding: 10px 12px; font-family: monospace; font-size: 13px; color: #1e3a8a; font-weight: 700; word-break: break-all;">
                 {invite_token}
             </div>
+
+            <p style="margin: 14px 0 0 0; font-size: 12px; color: #64748b;">
+                Mobile App Deep Link: <a href="attendapp://enroll?token={invite_token}" style="color: #0284c7;">attendapp://enroll?token={invite_token}</a>
+            </p>
         </div>
         """
 
@@ -122,9 +145,23 @@ def generate_welcome_email_text(
     email: str,
     temporary_password: str,
     company_name: str,
-    invite_token: Optional[str] = None
+    invite_token: Optional[str] = None,
+    invite_url: Optional[str] = None
 ) -> str:
-    token_str = f"\nBiometric Enrollment Token: {invite_token}\n" if invite_token else ""
+    resolved_url = invite_url or (f"{settings.FRONTEND_URL.rstrip('/')}/enroll?token={invite_token}" if invite_token else None)
+    token_str = ""
+    if invite_token:
+        token_str = f"""
+BIOMETRIC FACE SCAN ENROLLMENT:
+Please complete your 3D facial verification using this link:
+{resolved_url}
+
+Enrollment Key / Token:
+{invite_token}
+
+Mobile App Deep Link:
+attendapp://enroll?token={invite_token}
+"""
     return f"""Welcome to {company_name} Attendance Portal
 
 Dear {employee_name},
@@ -144,20 +181,23 @@ async def send_employee_welcome_email(
     employee_code: str,
     temporary_password: str,
     company_name: str,
-    invite_token: Optional[str] = None
+    invite_token: Optional[str] = None,
+    invite_url: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Sends credentials to employee via AWS SES.
     If AWS credentials are not set, runs in simulated mode and logs details safely.
     """
     subject = f"Your Attendance Credentials - {company_name}"
+    resolved_url = invite_url or (f"{settings.FRONTEND_URL.rstrip('/')}/enroll?token={invite_token}" if invite_token else None)
     html_content = generate_welcome_email_html(
         employee_name=employee_name,
         employee_code=employee_code,
         email=to_email,
         temporary_password=temporary_password,
         company_name=company_name,
-        invite_token=invite_token
+        invite_token=invite_token,
+        invite_url=resolved_url
     )
     text_content = generate_welcome_email_text(
         employee_name=employee_name,
@@ -165,7 +205,8 @@ async def send_employee_welcome_email(
         email=to_email,
         temporary_password=temporary_password,
         company_name=company_name,
-        invite_token=invite_token
+        invite_token=invite_token,
+        invite_url=resolved_url
     )
 
     # Check if AWS credentials exist
@@ -177,19 +218,21 @@ async def send_employee_welcome_email(
         )
         print(f"\n=======================================================")
         print(f"[AWS SES SIMULATED EMAIL DISPATCH]")
-        print(f"Recipient: {to_email}")
-        print(f"Subject:   {subject}")
-        print(f"Company:   {company_name}")
-        print(f"Employee:  {employee_name} ({employee_code})")
-        print(f"Password:  {temporary_password}")
+        print(f"Recipient:  {to_email}")
+        print(f"Subject:    {subject}")
+        print(f"Company:    {company_name}")
+        print(f"Employee:   {employee_name} ({employee_code})")
+        print(f"Password:   {temporary_password}")
         if invite_token:
-            print(f"Invite:    {invite_token}")
+            print(f"Invite Key: {invite_token}")
+            print(f"Invite URL: {resolved_url}")
         print(f"=======================================================\n")
         return {
             "status": "simulated",
             "delivered": True,
             "message": "AWS credentials not provided. Logged credentials for local development.",
-            "recipient": to_email
+            "recipient": to_email,
+            "invite_url": resolved_url
         }
 
     try:
@@ -573,4 +616,197 @@ async def send_late_digest_email(
     except Exception as e:
         logger.error(f"Failed to send HR late digest email: {str(e)}")
         return {"status": "error", "delivered": False, "error": str(e), "recipients": to_emails}
+
+# ==============================================================================
+# Grace Period Check-In Reminder Email
+# ==============================================================================
+
+def generate_grace_reminder_html(
+    employee_name: str,
+    employee_code: str,
+    scheduled_start_str: str,
+    grace_cutoff_str: str,
+    grace_period_minutes: int,
+    company_name: str,
+    shift_name: str = "Standard Shift"
+) -> str:
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grace Period Check-In Reminder - {company_name}</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a;">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f1f5f9; padding: 40px 16px;">
+        <tr>
+            <td align="center">
+                <table width="100%" max-width="600" cellpadding="0" cellspacing="0" border="0" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(15, 23, 42, 0.05);">
+                    <!-- Header -->
+                    <tr>
+                        <td style="background-color: #0f172a; padding: 28px 40px; text-align: left;">
+                            <div style="font-size: 11px; font-weight: 700; color: #f59e0b; letter-spacing: 1.5px; text-transform: uppercase;">CHECK-IN REMINDER &bull; ACTIVE GRACE PERIOD</div>
+                            <div style="font-size: 22px; font-weight: 800; color: #ffffff; margin-top: 4px;">{company_name}</div>
+                        </td>
+                    </tr>
+
+                    <!-- Body -->
+                    <tr>
+                        <td style="padding: 36px 40px;">
+                            <h1 style="margin: 0 0 14px 0; font-size: 19px; font-weight: 700; color: #0f172a;">Your Shift Has Started</h1>
+                            <p style="margin: 0 0 20px 0; font-size: 14px; line-height: 1.6; color: #334155;">
+                                Dear {employee_name}, your scheduled shift started at <strong>{scheduled_start_str}</strong>. You are currently within your <strong>{grace_period_minutes}-minute grace period</strong>, and our system has not yet received your check-in.
+                            </p>
+
+                            <!-- Breakdown Table -->
+                            <div style="background-color: #fffbeb; border: 1px solid #fef3c7; border-radius: 8px; padding: 20px; margin-bottom: 24px;">
+                                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                                    <tr>
+                                        <td style="padding-bottom: 10px; font-size: 12px; color: #92400e; font-weight: 600;">EMPLOYEE</td>
+                                        <td style="padding-bottom: 10px; font-size: 13px; color: #0f172a; font-weight: 700; text-align: right;">{employee_name} ({employee_code})</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding-bottom: 10px; font-size: 12px; color: #92400e; font-weight: 600;">ASSIGNED SHIFT</td>
+                                        <td style="padding-bottom: 10px; font-size: 13px; color: #0f172a; font-weight: 700; text-align: right;">{shift_name}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding-bottom: 10px; font-size: 12px; color: #92400e; font-weight: 600;">SCHEDULED START</td>
+                                        <td style="padding-bottom: 10px; font-size: 13px; color: #0f172a; font-weight: 700; text-align: right;">{scheduled_start_str}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding-bottom: 10px; font-size: 12px; color: #92400e; font-weight: 600;">GRACE DURATION</td>
+                                        <td style="padding-bottom: 10px; font-size: 13px; color: #0f172a; font-weight: 700; text-align: right;">{grace_period_minutes} minutes</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding-top: 8px; border-top: 1px dashed #fde68a; font-size: 13px; color: #b45309; font-weight: 700;">GRACE CUTOFF TIME</td>
+                                        <td style="padding-top: 8px; border-top: 1px dashed #fde68a; font-size: 14px; color: #b45309; font-weight: 800; text-align: right;">{grace_cutoff_str}</td>
+                                    </tr>
+                                </table>
+                            </div>
+
+                            <p style="margin: 0 0 20px 0; font-size: 13px; line-height: 1.5; color: #475569;">
+                                Please authenticate via facial recognition on the Mobile Application or authorized Attendance Kiosk before <strong>{grace_cutoff_str}</strong> to ensure your attendance is marked on-time.
+                            </p>
+
+                            <p style="margin: 0; font-size: 12px; line-height: 1.5; color: #94a3b8;">
+                                Note: If you are already on-site or experiencing device issues, please notify your manager or submit an attendance regularization request.
+                            </p>
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color: #f8fafc; padding: 18px 40px; border-top: 1px solid #e2e8f0; text-align: center;">
+                            <p style="margin: 0; font-size: 12px; color: #94a3b8;">
+                                Automated reminder from {company_name} Attendance Management System
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+"""
+
+def generate_grace_reminder_text(
+    employee_name: str,
+    employee_code: str,
+    scheduled_start_str: str,
+    grace_cutoff_str: str,
+    grace_period_minutes: int,
+    company_name: str,
+    shift_name: str = "Standard Shift"
+) -> str:
+    return f"""Attendance Check-In Reminder - {company_name}
+
+Dear {employee_name},
+
+Your scheduled shift ({shift_name}) began at {scheduled_start_str}.
+You are currently within your {grace_period_minutes}-minute grace period.
+
+Grace Cutoff: {grace_cutoff_str}
+
+Please complete your facial recognition check-in via the Mobile App or attendance station before {grace_cutoff_str} to avoid being marked late.
+
+Automated notification from {company_name} Attendance System.
+"""
+
+async def send_grace_period_reminder_email(
+    to_email: str,
+    employee_name: str,
+    employee_code: str,
+    scheduled_start_str: str,
+    grace_cutoff_str: str,
+    grace_period_minutes: int,
+    company_name: str,
+    shift_name: str = "Standard Shift"
+) -> Dict[str, Any]:
+    """
+    Sends an automated check-in reminder to an employee who is within their grace period window
+    and has not yet checked in.
+    """
+    subject = f"Check-In Reminder: Grace Period Active ({grace_cutoff_str}) - {company_name}"
+    html_content = generate_grace_reminder_html(
+        employee_name=employee_name,
+        employee_code=employee_code,
+        scheduled_start_str=scheduled_start_str,
+        grace_cutoff_str=grace_cutoff_str,
+        grace_period_minutes=grace_period_minutes,
+        company_name=company_name,
+        shift_name=shift_name
+    )
+    text_content = generate_grace_reminder_text(
+        employee_name=employee_name,
+        employee_code=employee_code,
+        scheduled_start_str=scheduled_start_str,
+        grace_cutoff_str=grace_cutoff_str,
+        grace_period_minutes=grace_period_minutes,
+        company_name=company_name,
+        shift_name=shift_name
+    )
+
+    has_aws_keys = bool(settings.AWS_ACCESS_KEY_ID.strip() and settings.AWS_SECRET_ACCESS_KEY.strip())
+    if not has_aws_keys:
+        logger.info(
+            f"[AWS SES SIMULATED GRACE REMINDER] To: {to_email} | Employee: {employee_name} | Grace Ends: {grace_cutoff_str}"
+        )
+        print(f"\n=======================================================")
+        print(f"[AWS SES SIMULATED] GRACE PERIOD CHECK-IN REMINDER")
+        print(f"Recipient:  {to_email}")
+        print(f"Employee:   {employee_name} ({employee_code})")
+        print(f"Shift:      {shift_name} (Started: {scheduled_start_str})")
+        print(f"Grace Cutoff: {grace_cutoff_str} ({grace_period_minutes}m)")
+        print(f"Company:    {company_name}")
+        print(f"=======================================================\n")
+        return {"status": "simulated", "delivered": True, "recipient": to_email}
+
+    try:
+        ses_client = boto3.client(
+            "ses",
+            region_name=settings.AWS_REGION,
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY
+        )
+        response = ses_client.send_email(
+            Source=settings.AWS_SES_FROM_EMAIL,
+            Destination={"ToAddresses": [to_email]},
+            Message={
+                "Subject": {"Data": subject, "Charset": "UTF-8"},
+                "Body": {
+                    "Text": {"Data": text_content, "Charset": "UTF-8"},
+                    "Html": {"Data": html_content, "Charset": "UTF-8"}
+                }
+            }
+        )
+        return {
+            "status": "sent",
+            "delivered": True,
+            "message_id": response.get("MessageId"),
+            "recipient": to_email
+        }
+    except Exception as e:
+        logger.error(f"Failed to send grace reminder email to {to_email}: {str(e)}")
+        return {"status": "error", "delivered": False, "error": str(e), "recipient": to_email}
 

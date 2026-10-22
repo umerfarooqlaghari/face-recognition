@@ -13,6 +13,7 @@ import {
   Platform,
   Image,
   Linking,
+  Share,
 } from 'react-native';
 import { User } from '../types';
 import {
@@ -271,15 +272,31 @@ export default function ManagementPortal({
   const handleSendInvite = async (emp: EmployeeItem) => {
     try {
       const res = await resendEmployeeInvite(emp.id);
+      const inviteUrl = res.invite_url || `https://face-scan.alpha-devs.cloud/enroll?token=${res.invite_token}`;
       Alert.alert(
-        'Face Scan Invite Generated',
-        `48-Hour Face Scan Enrollment Token generated for ${emp.full_name} (${emp.employee_code}).\n\nInvite Token:\n${res.invite_token}`,
+        'Face Scan Invite Ready',
+        `Enrollment link created for ${emp.full_name} (${emp.employee_code}).\n\nShareable Link:\n${inviteUrl}\n\nToken:\n${res.invite_token}`,
         [
           {
-            text: 'Copy Token',
+            text: 'Share Link',
             onPress: async () => {
-              await Clipboard.setStringAsync(res.invite_token);
-              Alert.alert('Copied!', 'Invite token copied to clipboard.');
+              try {
+                await Share.share({
+                  message: `Hi ${emp.full_name}, please complete your face scan enrollment here: ${inviteUrl}`,
+                  url: inviteUrl,
+                  title: 'Face Scan Biometric Enrollment',
+                });
+              } catch (e) {
+                await Clipboard.setStringAsync(inviteUrl);
+                Alert.alert('Copied!', 'Invite link copied to clipboard.');
+              }
+            },
+          },
+          {
+            text: 'Copy Link',
+            onPress: async () => {
+              await Clipboard.setStringAsync(inviteUrl);
+              Alert.alert('Copied!', 'Direct enrollment link copied to clipboard.');
             },
           },
           { text: 'Done', style: 'cancel' },

@@ -50,6 +50,13 @@ const ClockIcon = ({ size = 18, color = "currentColor" }: { size?: number; color
   </svg>
 );
 
+const BellIcon = ({ size = 18, color = "currentColor" }: { size?: number; color?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+  </svg>
+);
+
 const FileTextIcon = ({ size = 18, color = "currentColor" }: { size?: number; color?: string }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -432,6 +439,111 @@ export default function Home() {
     }, 4000);
   };
 
+  // Web Device Telemetry ID
+  const getWebDeviceId = () => {
+    if (typeof window === "undefined") return "web-client";
+    let devId = localStorage.getItem("attend_device_id");
+    if (!devId) {
+      devId = `web-${Math.random().toString(36).substring(2, 10)}-${Date.now()}`;
+      localStorage.setItem("attend_device_id", devId);
+    }
+    return devId;
+  };
+
+  // Automatic redirect to login when JWT token or login expires
+  const handleSessionExpired = (message: string = "Your session has expired. Redirecting to login...") => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("attend_token");
+      localStorage.removeItem("attend_refresh_token");
+      localStorage.removeItem("attend_user");
+    }
+    setToken(null);
+    setUser(null);
+    setTenantStats(null);
+    setEmployees([]);
+    setLeaves([]);
+    setRegularizationRequests([]);
+    setTimesheets([]);
+    setAuthMode("login");
+    showToast(message, "error");
+    if (typeof window !== "undefined") {
+      setTimeout(() => {
+        const authCard = document.getElementById("auth-form-card");
+        authCard?.scrollIntoView({ behavior: "smooth" });
+      }, 100);
+    }
+  };
+
+  // 7-Day Refresh Token Rotation
+  const refreshSessionTokens = async (): Promise<string | null> => {
+    if (typeof window === "undefined") return null;
+    const refreshToken = localStorage.getItem("attend_refresh_token");
+    if (!refreshToken) return null;
+    const devId = getWebDeviceId();
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          refresh_token: refreshToken,
+          device_id: devId,
+        }),
+      });
+
+      if (!res.ok) {
+        handleSessionExpired("Your 7-day session has expired. Please sign in again.");
+        return null;
+      }
+
+      const data = await res.json();
+      localStorage.setItem("attend_token", data.access_token);
+      if (data.refresh_token) {
+        localStorage.setItem("attend_refresh_token", data.refresh_token);
+      }
+      if (data.user) {
+        localStorage.setItem("attend_user", JSON.stringify(data.user));
+        setUser(data.user);
+      }
+      setToken(data.access_token);
+      return data.access_token;
+    } catch {
+      handleSessionExpired("Authentication error. Please sign in again.");
+      return null;
+    }
+  };
+
+  // Authenticated fetch wrapper with automatic 401 interception, refresh, and redirect
+  const authFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
+    let currentToken = token || (typeof window !== "undefined" ? localStorage.getItem("attend_token") : null);
+
+    if (!currentToken) {
+      handleSessionExpired("User not authenticated. Please log in.");
+      throw new Error("User is not authenticated. Redirecting to login...");
+    }
+
+    const headers = new Headers(options.headers || {});
+    headers.set("Authorization", `Bearer ${currentToken}`);
+
+    let res = await fetch(url, { ...options, headers });
+
+    // When a JWT token or login is expired (401 Unauthorized)
+    if (res.status === 401) {
+      // Attempt silent 7-day refresh token rotation
+      const newToken = await refreshSessionTokens();
+      if (newToken) {
+        headers.set("Authorization", `Bearer ${newToken}`);
+        res = await fetch(url, { ...options, headers });
+      } else {
+        // Refresh failed or 7-day token expired -> automatically redirect to login
+        handleSessionExpired("Your session has expired. Please log in again.");
+        throw new Error("Session expired. Redirecting to login...");
+      }
+    }
+
+    return res;
+  };
+
   // 1. Initial Load: Retrieve stored session & dates
   useEffect(() => {
     const today = new Date();
@@ -454,6 +566,18 @@ export default function Home() {
       } catch {
         // ignore parse
       }
+
+      // Verify token freshness against /auth/me; if expired attempt 7-day refresh or redirect
+      fetch(`${API_BASE_URL}/auth/me`, {
+        headers: { Authorization: `Bearer ${savedToken}` },
+      }).then(async (meRes) => {
+        if (meRes.status === 401) {
+          const refreshedToken = await refreshSessionTokens();
+          if (!refreshedToken) {
+            handleSessionExpired("Your session has expired. Please log in again.");
+          }
+        }
+      }).catch(() => {});
     }
   }, []);
 
@@ -477,9 +601,7 @@ export default function Home() {
 
   const fetchTenantStats = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/management/tenant`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await authFetch(`${API_BASE_URL}/management/tenant`);
       if (res.ok) {
         const data = await res.json();
         setTenantStats(data);
@@ -504,9 +626,7 @@ export default function Home() {
     if (!uId) return;
 
     try {
-      const res = await fetch(`${API_BASE_URL}/attendance/today/${uId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await authFetch(`${API_BASE_URL}/attendance/today/${uId}`);
       if (res.ok) {
         const data = await res.json();
         setMyTodayAttendance(data);
@@ -519,10 +639,9 @@ export default function Home() {
   const handleWebCheckOut = async () => {
     try {
       setCheckingOutSelf(true);
-      const res = await fetch(`${API_BASE_URL}/attendance/check-out`, {
+      const res = await authFetch(`${API_BASE_URL}/attendance/check-out`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({}),
@@ -548,9 +667,7 @@ export default function Home() {
   const fetchCalendar = async (userId: string, year: number, month: number) => {
     try {
       setCalendarLoading(true);
-      const res = await fetch(`${API_BASE_URL}/attendance/calendar/${userId}?year=${year}&month=${month}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await authFetch(`${API_BASE_URL}/attendance/calendar/${userId}?year=${year}&month=${month}`);
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.detail || "Failed to load employee attendance calendar");
@@ -632,10 +749,9 @@ export default function Home() {
             grace_period_minutes: null,
             timezone: null,
           };
-      const res = await fetch(`${API_BASE_URL}/management/employees/${shiftEmployee.id}/shift`, {
+      const res = await authFetch(`${API_BASE_URL}/management/employees/${shiftEmployee.id}/shift`, {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),
@@ -658,10 +774,9 @@ export default function Home() {
     e.preventDefault();
     try {
       setTenantTimingsSaving(true);
-      const res = await fetch(`${API_BASE_URL}/management/tenant/timings`, {
+      const res = await authFetch(`${API_BASE_URL}/management/tenant/timings`, {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -698,10 +813,9 @@ export default function Home() {
     if (!selectedOfficeForTiming) return;
     try {
       setOfficeTimingSaving(true);
-      const res = await fetch(`${API_BASE_URL}/management/offices/${selectedOfficeForTiming.id}/timings`, {
+      const res = await authFetch(`${API_BASE_URL}/management/offices/${selectedOfficeForTiming.id}/timings`, {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -728,9 +842,8 @@ export default function Home() {
   const handleSendLateDigest = async () => {
     try {
       setLateDigestSending(true);
-      const res = await fetch(`${API_BASE_URL}/attendance/send-late-digest`, {
+      const res = await authFetch(`${API_BASE_URL}/attendance/send-late-digest`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
       if (!res.ok) {
@@ -746,9 +859,7 @@ export default function Home() {
 
   const fetchEmployees = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/management/employees`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await authFetch(`${API_BASE_URL}/management/employees`);
       if (res.ok) {
         const data = await res.json();
         setEmployees(data);
@@ -760,9 +871,7 @@ export default function Home() {
 
   const fetchLeaves = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/leaves/tenant-leaves`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await authFetch(`${API_BASE_URL}/leaves/tenant-leaves`);
       if (res.ok) {
         const data = await res.json();
         setLeaves(data);
@@ -774,9 +883,7 @@ export default function Home() {
 
   const fetchRegularizationRequests = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/attendance/tenant-regularization-requests`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await authFetch(`${API_BASE_URL}/attendance/tenant-regularization-requests`);
       if (res.ok) {
         const data = await res.json();
         setRegularizationRequests(data);
@@ -788,9 +895,7 @@ export default function Home() {
 
   const fetchTimesheets = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/attendance/timesheets`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await authFetch(`${API_BASE_URL}/attendance/timesheets`);
       if (res.ok) {
         const data = await res.json();
         setTimesheets(data);
@@ -802,9 +907,7 @@ export default function Home() {
 
   const fetchOffices = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/management/offices`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await authFetch(`${API_BASE_URL}/management/offices`);
       if (res.ok) {
         const data = await res.json();
         setOffices(data);
@@ -819,9 +922,7 @@ export default function Home() {
 
   const fetchBillingStatus = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/billing/subscription-status`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await authFetch(`${API_BASE_URL}/billing/subscription-status`);
       if (res.ok) {
         const data = await res.json();
         setBillingInfo(data);
@@ -834,9 +935,8 @@ export default function Home() {
   const handleStartSubscription = async () => {
     try {
       setBillingLoading(true);
-      const res = await fetch(`${API_BASE_URL}/billing/create-checkout-session`, {
+      const res = await authFetch(`${API_BASE_URL}/billing/create-checkout-session`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
       if (!res.ok) {
@@ -855,9 +955,8 @@ export default function Home() {
   const handleOpenCustomerPortal = async () => {
     try {
       setBillingLoading(true);
-      const res = await fetch(`${API_BASE_URL}/billing/create-portal-session`, {
+      const res = await authFetch(`${API_BASE_URL}/billing/create-portal-session`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
       if (!res.ok) {
@@ -881,6 +980,7 @@ export default function Home() {
     e.preventDefault();
     setLoading(true);
     try {
+      const devId = getWebDeviceId();
       const res = await fetch(`${API_BASE_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -888,7 +988,7 @@ export default function Home() {
           email: loginEmail.trim(),
           password: loginPassword,
           device: {
-            device_id: `web-${Date.now()}`,
+            device_id: devId,
             device_model: "Next.js Web Portal",
             os_name: "Web",
             os_version: "1.0",
@@ -901,6 +1001,10 @@ export default function Home() {
       setToken(data.access_token);
       setUser(data.user);
       localStorage.setItem("attend_token", data.access_token);
+      if (data.refresh_token) {
+        localStorage.setItem("attend_refresh_token", data.refresh_token);
+      }
+      localStorage.setItem("attend_device_id", devId);
       localStorage.setItem("attend_user", JSON.stringify(data.user));
       showToast(`Welcome back, ${data.user.full_name}!`);
     } catch (err: any) {
@@ -914,6 +1018,7 @@ export default function Home() {
     e.preventDefault();
     setLoading(true);
     try {
+      const devId = getWebDeviceId();
       const res = await fetch(`${API_BASE_URL}/auth/tenant/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -934,6 +1039,10 @@ export default function Home() {
       setToken(data.access_token);
       setUser(data.user);
       localStorage.setItem("attend_token", data.access_token);
+      if (data.refresh_token) {
+        localStorage.setItem("attend_refresh_token", data.refresh_token);
+      }
+      localStorage.setItem("attend_device_id", devId);
       localStorage.setItem("attend_user", JSON.stringify(data.user));
       showToast(`Organization "${companyName}" created successfully!`);
     } catch (err: any) {
@@ -952,7 +1061,9 @@ export default function Home() {
     setRegularizationRequests([]);
     setTimesheets([]);
     localStorage.removeItem("attend_token");
+    localStorage.removeItem("attend_refresh_token");
     localStorage.removeItem("attend_user");
+    setAuthMode("login");
     showToast("Signed out successfully.");
   };
 
@@ -982,10 +1093,9 @@ export default function Home() {
 
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/management/employees`, {
+      const res = await authFetch(`${API_BASE_URL}/management/employees`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -1028,9 +1138,7 @@ export default function Home() {
   // 1a-2. CSV Import Flow Handlers
   const handleDownloadImportTemplate = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/management/employees/import/template`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      const res = await authFetch(`${API_BASE_URL}/management/employees/import/template`);
       if (!res.ok) throw new Error("Failed to download CSV template");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -1065,9 +1173,8 @@ export default function Home() {
     try {
       const fd = new FormData();
       fd.append("csv", importFile);
-      const res = await fetch(`${API_BASE_URL}/management/employees/import/preview`, {
+      const res = await authFetch(`${API_BASE_URL}/management/employees/import/preview`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
         body: fd,
       });
       const data = await res.json();
@@ -1090,9 +1197,8 @@ export default function Home() {
     try {
       const fd = new FormData();
       fd.append("csv", importFile);
-      const res = await fetch(`${API_BASE_URL}/management/employees/import`, {
+      const res = await authFetch(`${API_BASE_URL}/management/employees/import`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
         body: fd,
       });
       const data = await res.json();
@@ -1144,10 +1250,9 @@ export default function Home() {
 
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/management/employees/${editingEmployee.id}`, {
+      const res = await authFetch(`${API_BASE_URL}/management/employees/${editingEmployee.id}`, {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -1182,9 +1287,8 @@ export default function Home() {
   const handleDeleteEmployee = async (employeeId: string, empName: string) => {
     if (!confirm(`Are you sure you want to remove ${empName} from the organization?`)) return;
     try {
-      const res = await fetch(`${API_BASE_URL}/management/employees/${employeeId}`, {
+      const res = await authFetch(`${API_BASE_URL}/management/employees/${employeeId}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
         const d = await res.json();
@@ -1203,10 +1307,9 @@ export default function Home() {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/leaves/apply`, {
+      const res = await authFetch(`${API_BASE_URL}/leaves/apply`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -1239,10 +1342,9 @@ export default function Home() {
     reviewNote?: string
   ) => {
     try {
-      const res = await fetch(`${API_BASE_URL}/leaves/${leaveId}/review`, {
+      const res = await authFetch(`${API_BASE_URL}/leaves/${leaveId}/review`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -1275,10 +1377,9 @@ export default function Home() {
     setLoading(true);
     try {
       const fullReason = `${regReasonSelect}: ${regReasonNotes.trim()}`;
-      const res = await fetch(`${API_BASE_URL}/attendance/regularize`, {
+      const res = await authFetch(`${API_BASE_URL}/attendance/regularize`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -1309,10 +1410,9 @@ export default function Home() {
     statusVal: "approved" | "rejected"
   ) => {
     try {
-      const res = await fetch(`${API_BASE_URL}/attendance/regularization-requests/${requestId}/review`, {
+      const res = await authFetch(`${API_BASE_URL}/attendance/regularization-requests/${requestId}/review`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -1338,10 +1438,9 @@ export default function Home() {
     if (!overrideEmployee) return;
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/work-modes/overrides`, {
+      const res = await authFetch(`${API_BASE_URL}/work-modes/overrides`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -1371,10 +1470,9 @@ export default function Home() {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/management/offices`, {
+      const res = await authFetch(`${API_BASE_URL}/management/offices`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -1404,9 +1502,8 @@ export default function Home() {
   const handleDeleteOffice = async (officeId: string, officeName: string) => {
     if (!confirm(`Are you sure you want to remove office location "${officeName}"?`)) return;
     try {
-      const res = await fetch(`${API_BASE_URL}/work-modes/offices/${officeId}`, {
+      const res = await authFetch(`${API_BASE_URL}/work-modes/offices/${officeId}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
         const d = await res.json();
@@ -1419,18 +1516,39 @@ export default function Home() {
     }
   };
 
-  // 9. Resend Invite Token
+  // 9. Resend Invite Token & Shareable Link
   const handleResendInvite = async (empId: string) => {
     try {
-      const res = await fetch(`${API_BASE_URL}/management/employees/${empId}/resend-invite`, {
+      const res = await authFetch(`${API_BASE_URL}/management/employees/${empId}/resend-invite`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Failed to resend credentials");
-      showToast(`Sent AWS SES credentials to employee.`);
+      const link = data.invite_url || `${window.location.origin}/enroll?token=${data.invite_token}`;
+      navigator.clipboard.writeText(link);
+      showToast(`Invite generated & shareable link copied to clipboard!`);
     } catch (err: any) {
       showToast(err.message, "error");
+    }
+  };
+
+  // Run Grace Period Reminder Audit
+  const [runningGraceAudit, setRunningGraceAudit] = useState(false);
+  const handleRunGraceAudit = async (force: boolean = false) => {
+    setRunningGraceAudit(true);
+    try {
+      const res = await authFetch(`${API_BASE_URL}/attendance/reminders/grace-check?force=${force}`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to run grace reminder audit");
+      
+      const msg = `Grace Audit: ${data.reminders_dispatched} reminder(s) routed. ${data.skipped_on_approved_leave?.length || 0} skipped on approved leave, ${data.skipped_already_checked_in?.length || 0} already checked in.`;
+      showToast(msg);
+    } catch (err: any) {
+      showToast(err.message, "error");
+    } finally {
+      setRunningGraceAudit(false);
     }
   };
 
@@ -3445,6 +3563,35 @@ export default function Home() {
               </div>
 
               <div className={styles.toolbarActions}>
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    background: "rgba(245, 158, 11, 0.12)",
+                    border: "1px solid rgba(245, 158, 11, 0.3)",
+                    padding: "6px 12px",
+                    borderRadius: 8,
+                    fontSize: 12,
+                    color: "#f59e0b",
+                    fontWeight: 600,
+                  }}
+                  title="Current organization grace period before check-ins are flagged as late."
+                >
+                  <ClockIcon size={13} color="#f59e0b" />
+                  <span>Grace: {defaultGracePeriodMinutes}m</span>
+                </div>
+
+                <button
+                  className={styles.btnSecondary}
+                  onClick={() => handleRunGraceAudit(false)}
+                  disabled={runningGraceAudit}
+                  title="Checks all active employees, excludes employees on approved leave or already checked in, and routes reminder emails to anyone currently in their grace period."
+                >
+                  <BellIcon size={14} color="#f59e0b" />
+                  <span>{runningGraceAudit ? "Auditing Grace..." : "Route Grace Reminders"}</span>
+                </button>
+
                 <select
                   className={styles.select}
                   style={{ width: 150 }}
@@ -4233,7 +4380,53 @@ export default function Home() {
                     <span>Employee Successfully Registered!</span>
                   </div>
                   <p style={{ fontSize: 13, color: "#cbd5e1", marginTop: 6 }}>
-                    Employee account created. Share this enrollment invite token with the employee to onboard their mobile app.
+                    Employee account created. Share the direct enrollment link below with the employee to complete 3D biometric face verification via browser or mobile app.
+                  </p>
+                </div>
+
+                {/* Direct Shareable Link */}
+                <div className={styles.formGroup} style={{ marginBottom: 16 }}>
+                  <label className={styles.label} style={{ color: "#38bdf8", fontWeight: 700 }}>
+                    Direct Shareable Enrollment Link (Instant Access)
+                  </label>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      background: "rgba(2, 132, 199, 0.12)",
+                      padding: "10px 14px",
+                      borderRadius: 8,
+                      border: "1px solid rgba(56, 189, 248, 0.35)",
+                      gap: 10,
+                    }}
+                  >
+                    <span
+                      style={{
+                        wordBreak: "break-all",
+                        fontFamily: "monospace",
+                        fontSize: 12,
+                        color: "#e0f2fe",
+                      }}
+                    >
+                      {createdEmployeeResult.invite_url || (typeof window !== "undefined" ? `${window.location.origin}/enroll?token=${createdEmployeeResult.invite_token}` : `/enroll?token=${createdEmployeeResult.invite_token}`)}
+                    </span>
+                    <button
+                      type="button"
+                      className={styles.btnPrimary}
+                      style={{ padding: "6px 14px", fontSize: 12, whiteSpace: "nowrap" }}
+                      onClick={() => {
+                        const link = createdEmployeeResult.invite_url || `${window.location.origin}/enroll?token=${createdEmployeeResult.invite_token}`;
+                        navigator.clipboard.writeText(link);
+                        showToast("Copied shareable enrollment link to clipboard!");
+                      }}
+                    >
+                      <CopyIcon size={14} />
+                      <span>Copy Link</span>
+                    </button>
+                  </div>
+                  <p style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
+                    Send this link via WhatsApp, Slack, or Email. Employee can open it on their mobile phone or PC to scan their face.
                   </p>
                 </div>
 

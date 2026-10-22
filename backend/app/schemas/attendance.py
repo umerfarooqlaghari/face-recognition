@@ -142,3 +142,25 @@ class TimesheetItemResponse(BaseModel):
     distance_from_office_meters: Optional[float] = None
     office_name: Optional[str] = None
 
+class GraceReminderEmployeeItem(BaseModel):
+    user_id: uuid.UUID
+    employee_name: str
+    employee_code: str
+    email: str
+    shift_name: str
+    scheduled_start: str
+    grace_cutoff: str
+    grace_period_minutes: int
+    status: str
+
+class GraceReminderAuditResponse(BaseModel):
+    status: str
+    evaluated_at: datetime
+    total_evaluated: int
+    reminders_dispatched: int
+    reminded_employees: List[GraceReminderEmployeeItem]
+    skipped_on_approved_leave: List[Dict[str, Any]]
+    skipped_already_checked_in: List[Dict[str, Any]]
+    skipped_outside_grace_window: int
+    message: str
+

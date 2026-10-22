@@ -17,7 +17,7 @@ class LoginRequest(BaseModel):
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
-    device_id: str
+    device_id: Optional[str] = None
 
 class UserRegisterRequest(BaseModel):
     email: EmailStr

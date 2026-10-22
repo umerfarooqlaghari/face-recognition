@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import boto3
 from botocore.exceptions import ClientError
 from app.core.config import settings

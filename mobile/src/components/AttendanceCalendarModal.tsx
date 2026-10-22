@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Modal,
   View,
@@ -13,11 +13,11 @@ import { getEmployeeAttendanceCalendar } from '../services/api';
 import {
   CalendarIcon,
   CloseIcon,
-  CheckIcon,
   ClockIcon,
   AlertIcon,
   ArrowLeftIcon,
   ArrowRightIcon,
+  CheckIcon,
 } from './SvgIcons';
 
 interface AttendanceCalendarModalProps {
@@ -28,6 +28,13 @@ interface AttendanceCalendarModalProps {
   employeeCode: string;
 }
 
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
 export default function AttendanceCalendarModal({
   visible,
   onClose,
@@ -36,9 +43,10 @@ export default function AttendanceCalendarModal({
   employeeCode,
 }: AttendanceCalendarModalProps) {
   const [year, setYear] = useState<number>(new Date().getFullYear());
-  const [month, setMonth] = useState<number>(new Date().getMonth() + 1);
+  const [month, setMonth] = useState<number>(new Date().getMonth() + 1); // 1-12
   const [calendarData, setCalendarData] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<any>(null);
 
   useEffect(() => {
@@ -53,19 +61,20 @@ export default function AttendanceCalendarModal({
   const fetchData = async (uId: string, y: number, m: number) => {
     try {
       setLoading(true);
+      setErrorMsg(null);
       const data = await getEmployeeAttendanceCalendar(uId, y, m);
       setCalendarData(data);
 
-      // Default selected day to today (if in current month) or first present/late day
       const todayStr = new Date().toISOString().split('T')[0];
       const matchToday = data?.days?.find((d: any) => d.date === todayStr);
       if (matchToday) {
         setSelectedDay(matchToday);
-      } else if (data?.days?.length > 0) {
+      } else if (data?.days && data.days.length > 0) {
         setSelectedDay(data.days[0]);
       }
-    } catch {
-      // ignore
+    } catch (err: any) {
+      console.warn('Calendar fetch error:', err);
+      setErrorMsg(err.message || 'Unable to sync calendar data');
     } finally {
       setLoading(false);
     }
@@ -95,10 +104,65 @@ export default function AttendanceCalendarModal({
     fetchData(userId, nextYear, nextMonth);
   };
 
-  // Determine starting weekday offset (0 = Sunday, 1 = Monday, etc.)
-  const firstDayOfMonth = new Date(year, month - 1, 1).getDay();
-  // Adjust so Monday is 0, Sunday is 6
-  const startDayOffset = (firstDayOfMonth + 6) % 7;
+  // Pre-compute month days layout reliably
+  const { startDayOffset, daysList } = useMemo(() => {
+    const totalDays = new Date(year, month, 0).getDate();
+    const firstDayOfWeek = new Date(year, month - 1, 1).getDay(); // 0 = Sun, 1 = Mon
+    const offset = (firstDayOfWeek + 6) % 7; // Monday = 0, Sunday = 6
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const apiDaysMap = new Map<string, any>();
+    if (calendarData?.days && Array.isArray(calendarData.days)) {
+      calendarData.days.forEach((d: any) => {
+        if (d.date) apiDaysMap.set(d.date, d);
+      });
+    }
+
+    const list = [];
+    for (let dayNum = 1; dayNum <= totalDays; dayNum++) {
+      const monthStr = String(month).padStart(2, '0');
+      const dayStr = String(dayNum).padStart(2, '0');
+      const dateStr = `${year}-${monthStr}-${dayStr}`;
+
+      const dayOfWeekIdx = new Date(year, month - 1, dayNum).getDay();
+      const isWeekend = dayOfWeekIdx === 0 || dayOfWeekIdx === 6;
+      const dayOfWeekName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeekIdx];
+
+      if (apiDaysMap.has(dateStr)) {
+        list.push(apiDaysMap.get(dateStr));
+      } else {
+        const isFuture = dateStr > todayStr;
+        let fallbackStatus = 'absent';
+        if (isWeekend) fallbackStatus = 'weekend';
+        else if (isFuture) fallbackStatus = 'upcoming';
+        else if (dateStr === todayStr) fallbackStatus = 'not_checked_in';
+
+        list.push({
+          date: dateStr,
+          day: dayNum,
+          day_of_week: dayOfWeekName,
+          is_weekend: isWeekend,
+          status: fallbackStatus,
+          is_late: false,
+          minutes_late: 0,
+          check_in_time: null,
+          check_out_time: null,
+          hours_worked: null,
+        });
+      }
+    }
+
+    return { startDayOffset: offset, daysList: list };
+  }, [year, month, calendarData]);
+
+  // Set initial selected day if not yet selected
+  useEffect(() => {
+    if (!selectedDay && daysList.length > 0) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const match = daysList.find(d => d.date === todayStr) || daysList[0];
+      setSelectedDay(match);
+    }
+  }, [daysList, selectedDay]);
 
   const summary = calendarData?.summary;
 
@@ -122,11 +186,12 @@ export default function AttendanceCalendarModal({
                   {employeeName || 'Attendance Calendar'}
                 </Text>
                 <Text style={styles.headerSub}>
-                  {employeeCode} • {calendarData?.shift_name || 'Standard'} ({calendarData?.scheduled_start_time || '09:00'} - {calendarData?.scheduled_end_time || '18:00'})
+                  {employeeCode ? `${employeeCode} • ` : ''}{calendarData?.shift_name || 'Standard Shift'}
+                  {calendarData?.scheduled_start_time ? ` (${calendarData.scheduled_start_time} - ${calendarData.scheduled_end_time || '18:00'})` : ''}
                 </Text>
               </View>
             </View>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+            <TouchableOpacity onPress={onClose} style={styles.closeBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
               <CloseIcon size={16} color="#64748b" />
             </TouchableOpacity>
           </View>
@@ -140,10 +205,10 @@ export default function AttendanceCalendarModal({
 
             <View style={{ alignItems: 'center' }}>
               <Text style={styles.monthNameText}>
-                {calendarData?.month_name || `Month ${month}`} {year}
+                {MONTH_NAMES[month - 1]} {year}
               </Text>
               <Text style={styles.monthTimezoneText}>
-                Timezone: {calendarData?.timezone || 'Local'}
+                {calendarData?.timezone ? `Timezone: ${calendarData.timezone}` : 'Local Time'}
               </Text>
             </View>
 
@@ -152,6 +217,30 @@ export default function AttendanceCalendarModal({
               <ArrowRightIcon size={14} color="#0284c7" />
             </TouchableOpacity>
           </View>
+
+          {/* Loading indicator bar */}
+          {loading && (
+            <View style={styles.loadingBanner}>
+              <ActivityIndicator size="small" color="#0284c7" />
+              <Text style={styles.loadingBannerText}>Updating schedule...</Text>
+            </View>
+          )}
+
+          {/* Error / Offline Banner */}
+          {errorMsg && !loading && (
+            <View style={styles.errorBanner}>
+              <AlertIcon size={14} color="#b45309" />
+              <Text style={styles.errorBannerText} numberOfLines={1}>
+                {errorMsg}
+              </Text>
+              <TouchableOpacity
+                style={styles.retryBtn}
+                onPress={() => fetchData(userId, year, month)}
+              >
+                <Text style={styles.retryBtnText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           {/* Summary KPI Strip */}
           {summary && (
@@ -179,178 +268,178 @@ export default function AttendanceCalendarModal({
             </View>
           )}
 
-          {loading ? (
-            <View style={{ paddingVertical: 60, alignItems: 'center' }}>
-              <ActivityIndicator size="large" color="#0284c7" />
-              <Text style={{ fontSize: 13, color: '#64748b', marginTop: 12 }}>Loading month schedule...</Text>
-            </View>
-          ) : (
-            <ScrollView style={{ flexShrink: 1 }} showsVerticalScrollIndicator={false}>
-              {/* Day Headers (Mon - Sun) */}
-              <View style={styles.weekdayRow}>
-                {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((dayChar, i) => (
-                  <View key={i} style={styles.weekdayCol}>
-                    <Text style={[styles.weekdayText, (i === 5 || i === 6) && styles.weekendText]}>
-                      {dayChar}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-
-              {/* Monthly Calendar Grid */}
-              <View style={styles.gridContainer}>
-                {/* Blank cells for offset */}
-                {Array.from({ length: startDayOffset }).map((_, i) => (
-                  <View key={`empty-${i}`} style={styles.emptyDayCell} />
-                ))}
-
-                {/* Actual Days */}
-                {calendarData?.days?.map((d: any) => {
-                  const isSelected = selectedDay?.date === d.date;
-                  const isPresent = d.status === 'present';
-                  const isLate = d.status === 'late';
-                  const isOnLeave = d.status === 'on_leave';
-                  const isAbsent = d.status === 'absent';
-                  const isWeekend = d.is_weekend;
-
-                  let dotColor = '#cbd5e1';
-                  if (isPresent) dotColor = '#059669';
-                  else if (isLate) dotColor = '#d97706';
-                  else if (isOnLeave) dotColor = '#7c3aed';
-                  else if (isAbsent) dotColor = '#dc2626';
-
-                  return (
-                    <TouchableOpacity
-                      key={d.date}
-                      style={[
-                        styles.dayCell,
-                        isWeekend && styles.dayCellWeekend,
-                        isPresent && styles.dayCellPresent,
-                        isLate && styles.dayCellLate,
-                        isOnLeave && styles.dayCellLeave,
-                        isSelected && styles.dayCellSelected,
-                      ]}
-                      onPress={() => setSelectedDay(d)}
-                    >
-                      <Text
-                        style={[
-                          styles.dayNumText,
-                          isWeekend && styles.dayNumWeekend,
-                          (isPresent || isLate || isOnLeave) && styles.dayNumActive,
-                          isSelected && styles.dayNumSelected,
-                        ]}
-                      >
-                        {d.day}
-                      </Text>
-
-                      {/* Small Status Indicator Dot */}
-                      {!isWeekend && (
-                        <View style={[styles.statusDot, { backgroundColor: dotColor }]} />
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              {/* Selected Day Agenda Detail Card */}
-              {selectedDay && (
-                <View style={styles.agendaCard}>
-                  <View style={styles.agendaHeaderRow}>
-                    <View>
-                      <Text style={styles.agendaDateTitle}>
-                        {selectedDay.day_of_week}, {selectedDay.date}
-                      </Text>
-                      <Text style={styles.agendaSub}>
-                        {selectedDay.is_weekend ? 'Non-Working Weekend' : 'Scheduled Work Day'}
-                      </Text>
-                    </View>
-
-                    <View
-                      style={[
-                        styles.statusBadge,
-                        selectedDay.status === 'present'
-                          ? styles.statusBadgePresent
-                          : selectedDay.status === 'late'
-                          ? styles.statusBadgeLate
-                          : selectedDay.status === 'on_leave'
-                          ? styles.statusBadgeLeave
-                          : selectedDay.status === 'absent'
-                          ? styles.statusBadgeAbsent
-                          : styles.statusBadgeWeekend,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.statusBadgeText,
-                          selectedDay.status === 'present'
-                            ? styles.statusBadgeTextPresent
-                            : selectedDay.status === 'late'
-                            ? styles.statusBadgeTextLate
-                            : selectedDay.status === 'on_leave'
-                            ? styles.statusBadgeTextLeave
-                            : selectedDay.status === 'absent'
-                            ? styles.statusBadgeTextAbsent
-                            : styles.statusBadgeTextWeekend,
-                        ]}
-                      >
-                        {selectedDay.status.replace('_', ' ').toUpperCase()}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {/* Attendance Log Details */}
-                  {selectedDay.check_in_time ? (
-                    <View style={styles.agendaDetailsBox}>
-                      <View style={styles.agendaDetailRow}>
-                        <View style={styles.detailCol}>
-                          <Text style={styles.detailColLabel}>CHECKED IN</Text>
-                          <Text style={styles.detailColTime}>{selectedDay.check_in_time}</Text>
-                        </View>
-                        <View style={styles.detailCol}>
-                          <Text style={styles.detailColLabel}>CHECKED OUT</Text>
-                          <Text style={styles.detailColTime}>
-                            {selectedDay.check_out_time || 'In Progress'}
-                          </Text>
-                        </View>
-                        <View style={styles.detailCol}>
-                          <Text style={styles.detailColLabel}>HOURS WORKED</Text>
-                          <Text style={styles.detailColTime}>
-                            {selectedDay.hours_worked_formatted || (selectedDay.hours_worked ? `${selectedDay.hours_worked}h` : '--')}
-                          </Text>
-                        </View>
-                      </View>
-
-                      {selectedDay.is_late && (
-                        <View style={styles.lateAlertBanner}>
-                          <AlertIcon size={13} color="#b45309" />
-                          <Text style={styles.lateAlertText}>
-                            Arrived {selectedDay.minutes_late} minutes past shift grace period
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-                  ) : selectedDay.status === 'on_leave' ? (
-                    <View style={styles.leaveDetailBox}>
-                      <Text style={styles.leaveDetailTitle}>Approved Leave of Absence</Text>
-                      {selectedDay.leave_reason && (
-                        <Text style={styles.leaveDetailReason}>
-                          Reason: "{selectedDay.leave_reason}"
-                        </Text>
-                      )}
-                    </View>
-                  ) : selectedDay.is_weekend ? (
-                    <Text style={styles.agendaEmptyText}>Weekend holiday. No attendance required.</Text>
-                  ) : (
-                    <Text style={styles.agendaEmptyText}>
-                      No check-in recorded for this work day.
-                    </Text>
-                  )}
+          <ScrollView style={{ flexShrink: 1 }} showsVerticalScrollIndicator={false}>
+            {/* Weekday Names Header (Mon - Sun) */}
+            <View style={styles.weekdayRow}>
+              {WEEKDAY_NAMES.map((name, i) => (
+                <View key={name} style={styles.weekdayCol}>
+                  <Text style={[styles.weekdayText, (i === 5 || i === 6) && styles.weekendText]}>
+                    {name}
+                  </Text>
                 </View>
-              )}
-            </ScrollView>
-          )}
+              ))}
+            </View>
 
-          {/* Footer Done Button */}
+            {/* Monthly Calendar Grid */}
+            <View style={styles.gridContainer}>
+              {/* Blank leading cells for offset */}
+              {Array.from({ length: startDayOffset }).map((_, i) => (
+                <View key={`empty-${i}`} style={styles.emptyDayCell} />
+              ))}
+
+              {/* All Days of the Month */}
+              {daysList.map((d: any) => {
+                const isSelected = selectedDay?.date === d.date;
+                const isPresent = d.status === 'present';
+                const isLate = d.status === 'late';
+                const isOnLeave = d.status === 'on_leave';
+                const isAbsent = d.status === 'absent';
+                const isWeekend = d.is_weekend;
+
+                let dotColor = 'transparent';
+                if (isPresent) dotColor = '#059669';
+                else if (isLate) dotColor = '#d97706';
+                else if (isOnLeave) dotColor = '#7c3aed';
+                else if (isAbsent) dotColor = '#dc2626';
+
+                return (
+                  <TouchableOpacity
+                    key={d.date}
+                    style={[
+                      styles.dayCell,
+                      isWeekend && styles.dayCellWeekend,
+                      isPresent && styles.dayCellPresent,
+                      isLate && styles.dayCellLate,
+                      isOnLeave && styles.dayCellLeave,
+                      isSelected && styles.dayCellSelected,
+                    ]}
+                    onPress={() => setSelectedDay(d)}
+                    activeOpacity={0.7}
+                  >
+                    <Text
+                      style={[
+                        styles.dayNumText,
+                        isWeekend && styles.dayNumWeekend,
+                        (isPresent || isLate || isOnLeave) && styles.dayNumActive,
+                        isSelected && styles.dayNumSelected,
+                      ]}
+                    >
+                      {d.day}
+                    </Text>
+
+                    {/* Small Status Indicator Dot */}
+                    {dotColor !== 'transparent' && (
+                      <View style={[styles.statusDot, { backgroundColor: dotColor }]} />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* Selected Day Agenda Detail Card */}
+            {selectedDay && (
+              <View style={styles.agendaCard}>
+                <View style={styles.agendaHeaderRow}>
+                  <View style={{ flex: 1, marginRight: 8 }}>
+                    <Text style={styles.agendaDateTitle}>
+                      {selectedDay.day_of_week}, {selectedDay.date}
+                    </Text>
+                    <Text style={styles.agendaSub}>
+                      {selectedDay.is_weekend ? 'Non-Working Weekend' : 'Scheduled Work Day'}
+                    </Text>
+                  </View>
+
+                  <View
+                    style={[
+                      styles.statusBadge,
+                      selectedDay.status === 'present'
+                        ? styles.statusBadgePresent
+                        : selectedDay.status === 'late'
+                        ? styles.statusBadgeLate
+                        : selectedDay.status === 'on_leave'
+                        ? styles.statusBadgeLeave
+                        : selectedDay.status === 'absent'
+                        ? styles.statusBadgeAbsent
+                        : selectedDay.status === 'weekend'
+                        ? styles.statusBadgeWeekend
+                        : styles.statusBadgeDefault,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.statusBadgeText,
+                        selectedDay.status === 'present'
+                          ? styles.statusBadgeTextPresent
+                          : selectedDay.status === 'late'
+                          ? styles.statusBadgeTextLate
+                          : selectedDay.status === 'on_leave'
+                          ? styles.statusBadgeTextLeave
+                          : selectedDay.status === 'absent'
+                          ? styles.statusBadgeTextAbsent
+                          : selectedDay.status === 'weekend'
+                          ? styles.statusBadgeTextWeekend
+                          : styles.statusBadgeTextDefault,
+                      ]}
+                    >
+                      {String(selectedDay.status || 'Scheduled').replace('_', ' ').toUpperCase()}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Attendance Log Details */}
+                {selectedDay.check_in_time ? (
+                  <View style={styles.agendaDetailsBox}>
+                    <View style={styles.agendaDetailRow}>
+                      <View style={styles.detailCol}>
+                        <Text style={styles.detailColLabel}>CHECKED IN</Text>
+                        <Text style={styles.detailColTime}>{selectedDay.check_in_time}</Text>
+                      </View>
+                      <View style={styles.detailCol}>
+                        <Text style={styles.detailColLabel}>CHECKED OUT</Text>
+                        <Text style={styles.detailColTime}>
+                          {selectedDay.check_out_time || 'In Progress'}
+                        </Text>
+                      </View>
+                      <View style={styles.detailCol}>
+                        <Text style={styles.detailColLabel}>HOURS WORKED</Text>
+                        <Text style={styles.detailColTime}>
+                          {selectedDay.hours_worked_formatted || (selectedDay.hours_worked ? `${selectedDay.hours_worked}h` : '--')}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {selectedDay.is_late && (
+                      <View style={styles.lateAlertBanner}>
+                        <AlertIcon size={13} color="#b45309" />
+                        <Text style={styles.lateAlertText}>
+                          Arrived {selectedDay.minutes_late} minutes past shift start
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                ) : selectedDay.status === 'on_leave' ? (
+                  <View style={styles.leaveDetailBox}>
+                    <Text style={styles.leaveDetailTitle}>Approved Leave of Absence</Text>
+                    {selectedDay.leave_reason ? (
+                      <Text style={styles.leaveDetailReason}>
+                        Reason: "{selectedDay.leave_reason}"
+                      </Text>
+                    ) : null}
+                  </View>
+                ) : selectedDay.is_weekend ? (
+                  <Text style={styles.agendaEmptyText}>Weekend holiday. No attendance required.</Text>
+                ) : selectedDay.status === 'upcoming' ? (
+                  <Text style={styles.agendaEmptyText}>Future working day.</Text>
+                ) : (
+                  <Text style={styles.agendaEmptyText}>
+                    No check-in recorded for this work day.
+                  </Text>
+                )}
+              </View>
+            )}
+          </ScrollView>
+
+          {/* Footer Close Button */}
           <View style={styles.footer}>
             <TouchableOpacity style={styles.doneBtn} onPress={onClose}>
               <Text style={styles.doneBtnText}>Close Calendar</Text>
@@ -447,7 +536,7 @@ const styles = StyleSheet.create({
     color: '#0284c7',
   },
   monthNameText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '800',
     color: '#0f172a',
     letterSpacing: -0.2,
@@ -456,6 +545,48 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#64748b',
     marginTop: 1,
+  },
+  loadingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 6,
+    backgroundColor: '#f0f9ff',
+    borderBottomWidth: 1,
+    borderColor: '#e0f2fe',
+  },
+  loadingBannerText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#0284c7',
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#fffbeb',
+    borderBottomWidth: 1,
+    borderColor: '#fef3c7',
+    gap: 6,
+  },
+  errorBannerText: {
+    flex: 1,
+    fontSize: 11,
+    color: '#92400e',
+    fontWeight: '500',
+  },
+  retryBtn: {
+    backgroundColor: '#d97706',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  retryBtnText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#ffffff',
   },
   kpiStrip: {
     flexDirection: 'row',
@@ -485,7 +616,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     paddingHorizontal: 12,
     paddingTop: 10,
-    paddingBottom: 4,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderColor: '#f1f5f9',
   },
   weekdayCol: {
     flex: 1,
@@ -494,7 +627,8 @@ const styles = StyleSheet.create({
   weekdayText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#64748b',
+    color: '#475569',
+    textTransform: 'uppercase',
   },
   weekendText: {
     color: '#94a3b8',
@@ -503,7 +637,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     paddingHorizontal: 12,
-    paddingBottom: 10,
+    paddingVertical: 8,
   },
   emptyDayCell: {
     width: '14.28%',
@@ -546,7 +680,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   dayNumText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '600',
     color: '#334155',
   },
@@ -562,14 +696,14 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   statusDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    marginTop: 3,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    marginTop: 2,
   },
   agendaCard: {
     marginHorizontal: 14,
-    marginBottom: 14,
+    marginVertical: 10,
     padding: 12,
     borderRadius: 12,
     backgroundColor: '#f8fafc',
@@ -602,12 +736,14 @@ const styles = StyleSheet.create({
   statusBadgeLeave: { backgroundColor: '#ede9fe' },
   statusBadgeAbsent: { backgroundColor: '#fee2e2' },
   statusBadgeWeekend: { backgroundColor: '#e2e8f0' },
+  statusBadgeDefault: { backgroundColor: '#f1f5f9' },
   statusBadgeText: { fontSize: 10, fontWeight: '800' },
   statusBadgeTextPresent: { color: '#059669' },
   statusBadgeTextLate: { color: '#d97706' },
   statusBadgeTextLeave: { color: '#7c3aed' },
   statusBadgeTextAbsent: { color: '#dc2626' },
   statusBadgeTextWeekend: { color: '#475569' },
+  statusBadgeTextDefault: { color: '#64748b' },
   agendaDetailsBox: {
     backgroundColor: '#ffffff',
     borderRadius: 8,

@@ -457,6 +457,7 @@ export interface LeaveItem {
   start_date: string;
   end_date: string;
   reason: string;
+  leave_type?: string | null;
   status: 'pending_manager' | 'pending_admin' | 'pending' | 'approved' | 'rejected';
   approved_by?: string | null;
   level1_approved_by?: string | null;
@@ -503,6 +504,49 @@ export async function getMyLeaves(): Promise<LeaveItem[]> {
   const res = await authFetch('/leaves/my-leaves');
   if (!res.ok) return [];
   return res.json();
+}
+
+export async function updateLeave(
+  leaveId: string,
+  payload: {
+    startDate?: string;
+    endDate?: string;
+    dates?: string[];
+    reason?: string;
+  }
+): Promise<LeaveItem> {
+  const sortedDates = payload.dates && payload.dates.length > 0 ? [...payload.dates].sort() : [];
+  const startDate = payload.startDate || (sortedDates.length > 0 ? sortedDates[0] : undefined);
+  const endDate = payload.endDate || (sortedDates.length > 0 ? sortedDates[sortedDates.length - 1] : undefined);
+
+  const res = await authFetch(`/leaves/${leaveId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      start_date: startDate,
+      end_date: endDate,
+      dates: sortedDates.length > 0 ? sortedDates : undefined,
+      reason: payload.reason,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to update leave request');
+  }
+
+  return res.json();
+}
+
+export async function cancelLeave(leaveId: string): Promise<void> {
+  const res = await authFetch(`/leaves/${leaveId}`, {
+    method: 'DELETE',
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to cancel leave request');
+  }
 }
 
 export async function getTenantLeaves(status?: string): Promise<LeaveItem[]> {

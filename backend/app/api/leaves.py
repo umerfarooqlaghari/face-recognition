@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.db.session import get_db
 from app.models.models import Leave, User, get_utc_now
 from app.api.deps import get_current_user
-from app.schemas.leaves import LeaveApplyRequest, LeaveReviewRequest, LeaveResponse
+from app.schemas.leaves import LeaveApplyRequest, LeaveUpdateRequest, LeaveReviewRequest, LeaveResponse
 
 router = APIRouter(prefix="/leaves", tags=["Leave Management"])
 
@@ -258,5 +258,89 @@ async def review_leave_request(
     await db.refresh(leave_obj)
 
     return await build_leave_response(db, leave_obj, emp)
+
+@router.put("/{leave_id}", response_model=LeaveResponse)
+async def update_leave_request(
+    leave_id: uuid.UUID,
+    req: LeaveUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Update a pending leave request (dates or reason).
+    Only pending requests can be modified.
+    """
+    res = await db.execute(
+        select(Leave, User)
+        .join(User, Leave.user_id == User.id)
+        .where(Leave.id == leave_id, Leave.tenant_id == current_user.tenant_id)
+    )
+    row = res.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Leave request not found")
+
+    leave_obj, emp = row
+
+    # Check permission: must be the leave owner or manager/admin
+    if leave_obj.user_id != current_user.id and current_user.role not in ["manager", "admin", "super_admin"]:
+        raise HTTPException(status_code=403, detail="You are not authorized to edit this leave request")
+
+    if leave_obj.status not in ["pending", "pending_manager", "pending_admin"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot edit leave request with status '{leave_obj.status}'. Only pending requests can be edited."
+        )
+
+    if req.dates and len(req.dates) > 0:
+        sorted_dates = sorted(req.dates)
+        leave_obj.start_date = sorted_dates[0]
+        leave_obj.end_date = sorted_dates[-1]
+    else:
+        new_start = req.start_date or leave_obj.start_date
+        new_end = req.end_date or leave_obj.end_date
+        if new_end < new_start:
+            raise HTTPException(status_code=400, detail="End date cannot precede start date")
+        leave_obj.start_date = new_start
+        leave_obj.end_date = new_end
+
+    if req.reason and req.reason.strip():
+        leave_obj.reason = req.reason.strip()
+
+    await db.commit()
+    await db.refresh(leave_obj)
+
+    return await build_leave_response(db, leave_obj, emp)
+
+@router.delete("/{leave_id}")
+async def cancel_leave_request(
+    leave_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Cancel / delete a pending leave request.
+    Only pending requests can be cancelled.
+    """
+    res = await db.execute(
+        select(Leave)
+        .where(Leave.id == leave_id, Leave.tenant_id == current_user.tenant_id)
+    )
+    leave_obj = res.scalar_one_or_none()
+    if not leave_obj:
+        raise HTTPException(status_code=404, detail="Leave request not found")
+
+    if leave_obj.user_id != current_user.id and current_user.role not in ["manager", "admin", "super_admin"]:
+        raise HTTPException(status_code=403, detail="You are not authorized to cancel this leave request")
+
+    if leave_obj.status not in ["pending", "pending_manager", "pending_admin"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel leave request with status '{leave_obj.status}'. Only pending requests can be cancelled."
+        )
+
+    await db.delete(leave_obj)
+    await db.commit()
+
+    return {"status": "success", "message": "Leave request cancelled successfully"}
 
 

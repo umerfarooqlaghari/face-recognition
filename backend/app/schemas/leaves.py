@@ -27,6 +27,12 @@ class LeaveApplyRequest(BaseModel):
             raise ValueError("End date must be greater than or equal to start date")
         return self
 
+class LeaveUpdateRequest(BaseModel):
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    dates: Optional[List[date]] = None
+    reason: Optional[str] = Field(None, min_length=3, max_length=500)
+
 class LeaveReviewRequest(BaseModel):
     status: str = Field(..., pattern="^(approved|rejected|bypass)$")
     review_note: Optional[str] = None

@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   TextInput,
   Image,
+  Modal,
 } from 'react-native';
 import { User } from '../types';
 import { getCurrentGPSLocation, LocationCoordinates } from '../services/location';
@@ -20,6 +21,8 @@ import {
   markAttendanceCheckOut,
   applyLeave,
   getMyLeaves,
+  updateLeave,
+  cancelLeave,
   deleteMyAccount,
   clearSession,
   LeaveItem,
@@ -36,6 +39,7 @@ import {
   CalendarIcon,
   ClockIcon,
   ChevronRightIcon,
+  CloseIcon,
 } from '../components/SvgIcons';
 import LeaveCalendarPicker from '../components/LeaveCalendarPicker';
 import HamburgerMenuModal from '../components/HamburgerMenuModal';
@@ -83,6 +87,97 @@ export default function EmployeePortal({
   const [selectedLeaveDates, setSelectedLeaveDates] = useState<string[]>([tomorrowStr]);
   const [leaveReason, setLeaveReason] = useState('');
   const [leaveSubmitting, setLeaveSubmitting] = useState(false);
+
+  // Leave Details, View All & In-line Editing
+  const [showAllLeavesModal, setShowAllLeavesModal] = useState(false);
+  const [selectedLeaveDetail, setSelectedLeaveDetail] = useState<LeaveItem | null>(null);
+  const [isEditingLeave, setIsEditingLeave] = useState(false);
+  const [editLeaveDates, setEditLeaveDates] = useState<string[]>([]);
+  const [editLeaveReason, setEditLeaveReason] = useState('');
+  const [editLeaveSubmitting, setEditLeaveSubmitting] = useState(false);
+  const [leaveFilter, setLeaveFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
+
+  const handleOpenLeaveDetail = (lv: LeaveItem) => {
+    setSelectedLeaveDetail(lv);
+    setIsEditingLeave(false);
+    // Expand dates array between start_date and end_date
+    const datesArr: string[] = [];
+    if (lv.start_date && lv.end_date) {
+      try {
+        const cur = new Date(lv.start_date);
+        const end = new Date(lv.end_date);
+        while (cur <= end) {
+          datesArr.push(cur.toISOString().split('T')[0]);
+          cur.setDate(cur.getDate() + 1);
+        }
+      } catch {
+        datesArr.push(lv.start_date);
+        if (lv.end_date !== lv.start_date) datesArr.push(lv.end_date);
+      }
+    } else if (lv.start_date) {
+      datesArr.push(lv.start_date);
+    }
+    setEditLeaveDates(datesArr.length > 0 ? datesArr : [tomorrowStr]);
+    setEditLeaveReason(lv.reason || '');
+  };
+
+  const handleUpdateLeave = async () => {
+    if (!selectedLeaveDetail) return;
+    if (editLeaveDates.length === 0) {
+      Alert.alert('Dates Required', 'Please select at least one leave date.');
+      return;
+    }
+    if (!editLeaveReason.trim()) {
+      Alert.alert('Reason Required', 'Please provide a reason for this leave request.');
+      return;
+    }
+
+    try {
+      setEditLeaveSubmitting(true);
+      const sorted = [...editLeaveDates].sort();
+      const updated = await updateLeave(selectedLeaveDetail.id, {
+        dates: sorted,
+        startDate: sorted[0],
+        endDate: sorted[sorted.length - 1],
+        reason: editLeaveReason.trim(),
+      });
+
+      Alert.alert('Leave Updated', 'Your leave request has been successfully updated.');
+      setSelectedLeaveDetail(updated);
+      setIsEditingLeave(false);
+      const refreshed = await getMyLeaves();
+      setLeavesList(refreshed);
+    } catch (err: any) {
+      Alert.alert('Update Failed', err.message || 'Could not update leave request');
+    } finally {
+      setEditLeaveSubmitting(false);
+    }
+  };
+
+  const handleCancelLeave = (leaveId: string) => {
+    Alert.alert(
+      'Cancel Leave Request',
+      'Are you sure you want to cancel this pending leave request?',
+      [
+        { text: 'Keep Request', style: 'cancel' },
+        {
+          text: 'Yes, Cancel',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await cancelLeave(leaveId);
+              Alert.alert('Cancelled', 'Your leave request has been cancelled.');
+              setSelectedLeaveDetail(null);
+              const refreshed = await getMyLeaves();
+              setLeavesList(refreshed);
+            } catch (err: any) {
+              Alert.alert('Cancellation Error', err.message || 'Could not cancel leave request');
+            }
+          },
+        },
+      ]
+    );
+  };
 
   useEffect(() => {
     loadWorkModeAndLocation();
@@ -407,14 +502,24 @@ export default function EmployeePortal({
       <View style={styles.card}>
         <View style={styles.cardHeader}>
           <Text style={styles.cardSectionTitle}>TIME OFF & LEAVES</Text>
-          <TouchableOpacity
-            style={styles.requestLeaveToggle}
-            onPress={() => setShowLeaveForm(!showLeaveForm)}
-          >
-            <Text style={styles.requestLeaveToggleText}>
-              {showLeaveForm ? 'Close' : '+ Request Leave'}
-            </Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            {leavesList.length > 0 && (
+              <TouchableOpacity
+                style={styles.viewAllLeavesBtn}
+                onPress={() => setShowAllLeavesModal(true)}
+              >
+                <Text style={styles.viewAllLeavesBtnText}>View All ({leavesList.length})</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={styles.requestLeaveToggle}
+              onPress={() => setShowLeaveForm(!showLeaveForm)}
+            >
+              <Text style={styles.requestLeaveToggleText}>
+                {showLeaveForm ? 'Close' : '+ Request'}
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {showLeaveForm && (
@@ -462,39 +567,55 @@ export default function EmployeePortal({
           <Text style={styles.emptyText}>No leave requests submitted yet.</Text>
         ) : (
           leavesList.slice(0, 3).map(lv => (
-            <View key={lv.id} style={styles.leaveHistoryRow}>
+            <TouchableOpacity
+              key={lv.id}
+              style={styles.leaveHistoryRow}
+              onPress={() => handleOpenLeaveDetail(lv)}
+              activeOpacity={0.7}
+            >
               <View style={{ flex: 1, marginRight: 8 }}>
                 <Text style={styles.leaveDateRange}>
-                  {lv.start_date} to {lv.end_date}
+                  {lv.start_date === lv.end_date ? lv.start_date : `${lv.start_date} to ${lv.end_date}`}
                 </Text>
                 <Text style={styles.leaveReasonText} numberOfLines={1}>
                   {lv.reason}
                 </Text>
               </View>
-              <View
-                style={[
-                  styles.leaveStatusPill,
-                  lv.status === 'approved'
-                    ? styles.pillApproved
-                    : lv.status === 'rejected'
-                    ? styles.pillRejected
-                    : styles.pillPending,
-                ]}
-              >
-                <Text
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <View
                   style={[
-                    styles.leaveStatusPillText,
+                    styles.leaveStatusPill,
                     lv.status === 'approved'
-                      ? styles.pillApprovedText
+                      ? styles.pillApproved
                       : lv.status === 'rejected'
-                      ? styles.pillRejectedText
-                      : styles.pillPendingText,
+                      ? styles.pillRejected
+                      : lv.status === 'pending_admin'
+                      ? styles.pillPendingAdmin
+                      : styles.pillPending,
                   ]}
                 >
-                  {lv.status.toUpperCase()}
-                </Text>
+                  <Text
+                    style={[
+                      styles.leaveStatusPillText,
+                      lv.status === 'approved'
+                        ? styles.pillApprovedText
+                        : lv.status === 'rejected'
+                        ? styles.pillRejectedText
+                        : lv.status === 'pending_admin'
+                        ? styles.pillPendingAdminText
+                        : styles.pillPendingText,
+                    ]}
+                  >
+                    {lv.status === 'pending_manager'
+                      ? 'L1 PENDING'
+                      : lv.status === 'pending_admin'
+                      ? 'L2 PENDING'
+                      : lv.status.toUpperCase()}
+                  </Text>
+                </View>
+                <ChevronRightIcon size={14} color="#94a3b8" />
               </View>
-            </View>
+            </TouchableOpacity>
           ))
         )}
       </View>
@@ -541,6 +662,372 @@ export default function EmployeePortal({
         employeeName={user.full_name}
         employeeCode={user.employee_code}
       />
+
+      {/* Leave Detail & In-Line Edit Modal */}
+      <Modal
+        visible={!!selectedLeaveDetail}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setSelectedLeaveDetail(null);
+          setIsEditingLeave(false);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.leaveDetailCard}>
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                <View style={[styles.headerIconBox, { backgroundColor: '#f5f3ff' }]}>
+                  <CalendarIcon size={18} color="#7c3aed" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.modalHeaderTitle}>
+                    {isEditingLeave ? 'Edit Leave Request' : 'Leave Details'}
+                  </Text>
+                  <Text style={styles.modalHeaderSub}>
+                    {selectedLeaveDetail?.leave_type || 'Annual Leave'}
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => {
+                  setSelectedLeaveDetail(null);
+                  setIsEditingLeave(false);
+                }}
+                style={styles.modalCloseBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <CloseIcon size={16} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ padding: 16 }} showsVerticalScrollIndicator={false}>
+              {selectedLeaveDetail && (
+                <>
+                  {isEditingLeave ? (
+                    <View>
+                      <Text style={styles.formLabel}>Update Leave Date(s)</Text>
+                      <LeaveCalendarPicker
+                        selectedDates={editLeaveDates}
+                        onSelectDates={setEditLeaveDates}
+                      />
+
+                      <Text style={[styles.formLabel, { marginTop: 12 }]}>Reason for Leave</Text>
+                      <TextInput
+                        style={[styles.input, { height: 70, textAlignVertical: 'top' }]}
+                        value={editLeaveReason}
+                        onChangeText={setEditLeaveReason}
+                        placeholder="State reason for your leave request..."
+                        placeholderTextColor="#94a3b8"
+                        multiline
+                      />
+
+                      <View style={{ flexDirection: 'row', gap: 10, marginTop: 16, marginBottom: 20 }}>
+                        <TouchableOpacity
+                          style={styles.cancelEditBtn}
+                          onPress={() => setIsEditingLeave(false)}
+                        >
+                          <Text style={styles.cancelEditBtnText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.saveEditBtn, editLeaveSubmitting && { opacity: 0.7 }]}
+                          onPress={handleUpdateLeave}
+                          disabled={editLeaveSubmitting}
+                        >
+                          {editLeaveSubmitting ? (
+                            <ActivityIndicator size="small" color="#ffffff" />
+                          ) : (
+                            <Text style={styles.saveEditBtnText}>Save Changes</Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ) : (
+                    <View>
+                      {/* Status Banner */}
+                      <View
+                        style={[
+                          styles.leaveDetailStatusBanner,
+                          selectedLeaveDetail.status === 'approved'
+                            ? styles.statusBannerApproved
+                            : selectedLeaveDetail.status === 'rejected'
+                            ? styles.statusBannerRejected
+                            : selectedLeaveDetail.status === 'pending_admin'
+                            ? styles.statusBannerPendingAdmin
+                            : styles.statusBannerPending,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.leaveDetailStatusTitle,
+                            selectedLeaveDetail.status === 'approved'
+                              ? styles.statusBannerApprovedText
+                              : selectedLeaveDetail.status === 'rejected'
+                              ? styles.statusBannerRejectedText
+                              : selectedLeaveDetail.status === 'pending_admin'
+                              ? styles.statusBannerPendingAdminText
+                              : styles.statusBannerPendingText,
+                          ]}
+                        >
+                          {selectedLeaveDetail.status === 'approved'
+                            ? 'Approved Leave'
+                            : selectedLeaveDetail.status === 'rejected'
+                            ? 'Request Rejected'
+                            : selectedLeaveDetail.status === 'pending_admin'
+                            ? 'Level 1 Approved • Awaiting Final Admin Review'
+                            : 'Pending Level 1 Manager Review'}
+                        </Text>
+                      </View>
+
+                      {/* Dates & Reason Info Box */}
+                      <View style={styles.leaveInfoBox}>
+                        <Text style={styles.leaveInfoLabel}>REQUESTED DATES</Text>
+                        <Text style={styles.leaveInfoValue}>
+                          {selectedLeaveDetail.start_date === selectedLeaveDetail.end_date
+                            ? selectedLeaveDetail.start_date
+                            : `${selectedLeaveDetail.start_date} to ${selectedLeaveDetail.end_date}`}
+                        </Text>
+
+                        <Text style={[styles.leaveInfoLabel, { marginTop: 12 }]}>REASON</Text>
+                        <Text style={styles.leaveInfoReason}>"{selectedLeaveDetail.reason}"</Text>
+
+                        <Text style={[styles.leaveInfoLabel, { marginTop: 12 }]}>SUBMITTED ON</Text>
+                        <Text style={styles.leaveInfoSub}>
+                          {selectedLeaveDetail.created_at
+                            ? new Date(selectedLeaveDetail.created_at).toLocaleDateString(undefined, {
+                                year: 'numeric',
+                                month: 'short',
+                                day: 'numeric',
+                              })
+                            : '--'}
+                        </Text>
+                      </View>
+
+                      {/* Multi-Level Approval Timeline */}
+                      <View style={styles.timelineBox}>
+                        <Text style={styles.timelineTitle}>APPROVAL PROCESS</Text>
+
+                        {/* Level 1: Manager */}
+                        <View style={styles.timelineRow}>
+                          <View
+                            style={[
+                              styles.timelineDot,
+                              selectedLeaveDetail.level1_approved_by || selectedLeaveDetail.status === 'approved'
+                                ? styles.timelineDotSuccess
+                                : selectedLeaveDetail.status === 'rejected'
+                                ? styles.timelineDotRejected
+                                : styles.timelineDotActive,
+                            ]}
+                          />
+                          <View style={{ flex: 1, marginLeft: 10 }}>
+                            <Text style={styles.timelineStepTitle}>Level 1: Manager Review</Text>
+                            <Text style={styles.timelineStepDesc}>
+                              {selectedLeaveDetail.level1_approver_name
+                                ? `Approved by ${selectedLeaveDetail.level1_approver_name}`
+                                : selectedLeaveDetail.admin_bypassed
+                                ? 'Bypassed by Organization Admin'
+                                : selectedLeaveDetail.status === 'rejected'
+                                ? 'Rejected during review'
+                                : selectedLeaveDetail.manager_name
+                                ? `Assigned to ${selectedLeaveDetail.manager_name}`
+                                : 'Pending review'}
+                            </Text>
+                          </View>
+                        </View>
+
+                        {/* Level 2: HR / Admin */}
+                        <View style={[styles.timelineRow, { marginTop: 14 }]}>
+                          <View
+                            style={[
+                              styles.timelineDot,
+                              selectedLeaveDetail.status === 'approved'
+                                ? styles.timelineDotSuccess
+                                : selectedLeaveDetail.status === 'rejected'
+                                ? styles.timelineDotRejected
+                                : styles.timelineDotPending,
+                            ]}
+                          />
+                          <View style={{ flex: 1, marginLeft: 10 }}>
+                            <Text style={styles.timelineStepTitle}>Level 2: Administrator / HR</Text>
+                            <Text style={styles.timelineStepDesc}>
+                              {selectedLeaveDetail.status === 'approved'
+                                ? selectedLeaveDetail.level2_approver_name
+                                  ? `Final approval by ${selectedLeaveDetail.level2_approver_name}`
+                                  : 'Final approval granted'
+                                : selectedLeaveDetail.status === 'rejected'
+                                ? 'Request not approved'
+                                : selectedLeaveDetail.status === 'pending_admin'
+                                ? 'Awaiting final approval'
+                                : 'Pending Level 1 approval first'}
+                            </Text>
+                          </View>
+                        </View>
+
+                        {/* Rejection Note if any */}
+                        {selectedLeaveDetail.rejection_reason && (
+                          <View style={styles.rejectionBox}>
+                            <AlertIcon size={14} color="#dc2626" />
+                            <Text style={styles.rejectionText}>
+                              Note: {selectedLeaveDetail.rejection_reason}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+
+                      {/* Action buttons if request is pending */}
+                      {['pending', 'pending_manager', 'pending_admin'].includes(selectedLeaveDetail.status) && (
+                        <View style={styles.leaveDetailActions}>
+                          <TouchableOpacity
+                            style={styles.editLeaveBtn}
+                            onPress={() => setIsEditingLeave(true)}
+                          >
+                            <Text style={styles.editLeaveBtnText}>Edit Request</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.cancelLeaveBtn}
+                            onPress={() => handleCancelLeave(selectedLeaveDetail.id)}
+                          >
+                            <Text style={styles.cancelLeaveBtnText}>Cancel Request</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </View>
+                  )}
+                </>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* View All Leaves Modal */}
+      <Modal
+        visible={showAllLeavesModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowAllLeavesModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.allLeavesCard}>
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                <View style={[styles.headerIconBox, { backgroundColor: '#f0fdf4' }]}>
+                  <CalendarIcon size={18} color="#15803d" />
+                </View>
+                <View>
+                  <Text style={styles.modalHeaderTitle}>My Leave Requests</Text>
+                  <Text style={styles.modalHeaderSub}>
+                    {leavesList.length} total recorded
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowAllLeavesModal(false)}
+                style={styles.modalCloseBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <CloseIcon size={16} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Filter Tabs */}
+            <View style={styles.leaveFilterRow}>
+              {(['all', 'pending', 'approved', 'rejected'] as const).map(tabKey => (
+                <TouchableOpacity
+                  key={tabKey}
+                  style={[styles.filterTab, leaveFilter === tabKey && styles.filterTabActive]}
+                  onPress={() => setLeaveFilter(tabKey)}
+                >
+                  <Text style={[styles.filterTabText, leaveFilter === tabKey && styles.filterTabTextActive]}>
+                    {tabKey.toUpperCase()}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <ScrollView style={{ paddingHorizontal: 16, paddingVertical: 8 }} showsVerticalScrollIndicator={false}>
+              {leavesList
+                .filter(lv => {
+                  if (leaveFilter === 'all') return true;
+                  if (leaveFilter === 'pending') {
+                    return ['pending', 'pending_manager', 'pending_admin'].includes(lv.status);
+                  }
+                  return lv.status === leaveFilter;
+                }).length === 0 ? (
+                  <View style={{ paddingVertical: 32, alignItems: 'center' }}>
+                    <Text style={styles.emptyText}>No leave requests matching "{leaveFilter}".</Text>
+                  </View>
+                ) : (
+                  leavesList
+                    .filter(lv => {
+                      if (leaveFilter === 'all') return true;
+                      if (leaveFilter === 'pending') {
+                        return ['pending', 'pending_manager', 'pending_admin'].includes(lv.status);
+                      }
+                      return lv.status === leaveFilter;
+                    })
+                    .map(lv => (
+                      <TouchableOpacity
+                        key={lv.id}
+                        style={styles.allLeavesItemCard}
+                        onPress={() => {
+                          setShowAllLeavesModal(false);
+                          handleOpenLeaveDetail(lv);
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <View style={{ flex: 1, marginRight: 8 }}>
+                          <Text style={styles.leaveDateRange}>
+                            {lv.start_date === lv.end_date ? lv.start_date : `${lv.start_date} to ${lv.end_date}`}
+                          </Text>
+                          <Text style={styles.leaveReasonText} numberOfLines={2}>
+                            {lv.reason}
+                          </Text>
+                          <Text style={styles.leaveMetaDate}>
+                            Submitted {new Date(lv.created_at).toLocaleDateString()}
+                          </Text>
+                        </View>
+                        <View style={{ alignItems: 'flex-end', justifyContent: 'center', gap: 6 }}>
+                          <View
+                            style={[
+                              styles.leaveStatusPill,
+                              lv.status === 'approved'
+                                ? styles.pillApproved
+                                : lv.status === 'rejected'
+                                ? styles.pillRejected
+                                : lv.status === 'pending_admin'
+                                ? styles.pillPendingAdmin
+                                : styles.pillPending,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.leaveStatusPillText,
+                                lv.status === 'approved'
+                                  ? styles.pillApprovedText
+                                  : lv.status === 'rejected'
+                                  ? styles.pillRejectedText
+                                  : lv.status === 'pending_admin'
+                                  ? styles.pillPendingAdminText
+                                  : styles.pillPendingText,
+                              ]}
+                            >
+                              {lv.status === 'pending_manager'
+                                ? 'L1 PENDING'
+                                : lv.status === 'pending_admin'
+                                ? 'L2 PENDING'
+                                : lv.status.toUpperCase()}
+                            </Text>
+                          </View>
+                          <ChevronRightIcon size={14} color="#94a3b8" />
+                        </View>
+                      </TouchableOpacity>
+                    ))
+                )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       {/* Clean Hamburger Menu Modal (Apple 5.1.1(v) Compliant & Clutter-Free) */}
       <HamburgerMenuModal
@@ -994,5 +1481,293 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0284c7',
     marginTop: 1,
+  },
+  viewAllLeavesBtn: {
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  viewAllLeavesBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1d4ed8',
+  },
+  pillPendingAdmin: {
+    backgroundColor: '#ede9fe',
+  },
+  pillPendingAdminText: {
+    color: '#6d28d9',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 14,
+  },
+  leaveDetailCard: {
+    width: '100%',
+    maxWidth: 420,
+    maxHeight: '90%',
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 8,
+  },
+  allLeavesCard: {
+    width: '100%',
+    maxWidth: 420,
+    maxHeight: '90%',
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 8,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderColor: '#f1f5f9',
+    backgroundColor: '#ffffff',
+  },
+  headerIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalHeaderTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  modalHeaderSub: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  leaveDetailStatusBanner: {
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  leaveDetailStatusTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  statusBannerApproved: { backgroundColor: '#d1fae5' },
+  statusBannerApprovedText: { color: '#065f46' },
+  statusBannerRejected: { backgroundColor: '#fee2e2' },
+  statusBannerRejectedText: { color: '#991b1b' },
+  statusBannerPending: { backgroundColor: '#fef3c7' },
+  statusBannerPendingText: { color: '#92400e' },
+  statusBannerPendingAdmin: { backgroundColor: '#ede9fe' },
+  statusBannerPendingAdminText: { color: '#5b21b6' },
+  leaveInfoBox: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 12,
+  },
+  leaveInfoLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+    letterSpacing: 0.3,
+  },
+  leaveInfoValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginTop: 3,
+  },
+  leaveInfoReason: {
+    fontSize: 13,
+    color: '#334155',
+    marginTop: 3,
+    fontStyle: 'italic',
+  },
+  leaveInfoSub: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  timelineBox: {
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 14,
+  },
+  timelineTitle: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+    letterSpacing: 0.3,
+    marginBottom: 10,
+  },
+  timelineRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  timelineDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginTop: 4,
+  },
+  timelineDotSuccess: { backgroundColor: '#059669' },
+  timelineDotActive: { backgroundColor: '#d97706' },
+  timelineDotPending: { backgroundColor: '#94a3b8' },
+  timelineDotRejected: { backgroundColor: '#dc2626' },
+  timelineStepTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  timelineStepDesc: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  rejectionBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#fee2e2',
+    borderRadius: 6,
+    padding: 8,
+    marginTop: 10,
+  },
+  rejectionText: {
+    fontSize: 11,
+    color: '#991b1b',
+    fontWeight: '600',
+    flex: 1,
+  },
+  leaveDetailActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 16,
+  },
+  editLeaveBtn: {
+    flex: 1,
+    backgroundColor: '#1e3a8a',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  editLeaveBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  cancelLeaveBtn: {
+    flex: 1,
+    backgroundColor: '#fff1f2',
+    borderWidth: 1,
+    borderColor: '#fecdd3',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  cancelLeaveBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#e11d48',
+  },
+  cancelEditBtn: {
+    flex: 1,
+    backgroundColor: '#f1f5f9',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  cancelEditBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  saveEditBtn: {
+    flex: 1,
+    backgroundColor: '#0284c7',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  saveEditBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  leaveFilterRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#f8fafc',
+    borderBottomWidth: 1,
+    borderColor: '#f1f5f9',
+    gap: 6,
+  },
+  filterTab: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  filterTabActive: {
+    backgroundColor: '#1e3a8a',
+    borderColor: '#1e3a8a',
+  },
+  filterTabText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  filterTabTextActive: {
+    color: '#ffffff',
+  },
+  allLeavesItemCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+    borderBottomWidth: 1,
+    borderColor: '#f1f5f9',
+  },
+  leaveMetaDate: {
+    fontSize: 10,
+    color: '#94a3b8',
+    marginTop: 3,
   },
 });
